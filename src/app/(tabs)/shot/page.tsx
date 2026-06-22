@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Camera, Check, ScanSearch, Sparkle, Tag } from "lucide-react";
-import { createAnalysis } from "@/lib/analysis-store";
+import { createAnalysis, saveAnalysisResult } from "@/lib/analysis-store";
+import type { AnalysisResult } from "@/lib/analysis-types";
 
 const stages = [
   { label: "Produkt wird erkannt", icon: ScanSearch },
@@ -12,29 +13,52 @@ const stages = [
 ];
 
 const STAGE_DURATION = 1150;
+const MIN_PROCESSING_MS = STAGE_DURATION * (stages.length - 1);
 
 export default function ShotPage() {
   const router = useRouter();
   const [stageIndex, setStageIndex] = useState<number | null>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (stageIndex === null) return;
-
-    if (stageIndex >= stages.length) {
-      const analysis = createAnalysis();
-      router.push(`/analyse/${analysis.id}`);
-      return;
-    }
-
+    if (stageIndex === null || stageIndex >= stages.length - 1) return;
     const timer = setTimeout(
       () => setStageIndex((current) => (current ?? 0) + 1),
       STAGE_DURATION,
     );
     return () => clearTimeout(timer);
-  }, [stageIndex, router]);
+  }, [stageIndex]);
 
-  function startAnalysis() {
+  async function runAnalysis(file: File) {
     setStageIndex(0);
+
+    const minDuration = new Promise((resolve) => setTimeout(resolve, MIN_PROCESSING_MS));
+    const formData = new FormData();
+    formData.append("image", file);
+
+    let analysisId: string;
+    try {
+      const [response] = await Promise.all([
+        fetch("/api/analyze", { method: "POST", body: formData }),
+        minDuration,
+      ]);
+      if (!response.ok) throw new Error(`/api/analyze antwortete mit ${response.status}`);
+      const result: AnalysisResult = await response.json();
+      analysisId = saveAnalysisResult(result).id;
+    } catch (error) {
+      console.error("Analyse fehlgeschlagen, falle auf Dummy-Ergebnis zurück:", error);
+      await minDuration;
+      analysisId = createAnalysis().id;
+    }
+
+    router.push(`/analyse/${analysisId}`);
+  }
+
+  function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (file) void runAnalysis(file);
   }
 
   if (stageIndex !== null) {
@@ -107,6 +131,22 @@ export default function ShotPage() {
 
   return (
     <div className="flex flex-col px-5 pt-6">
+      <input
+        ref={cameraInputRef}
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        capture="environment"
+        className="hidden"
+        onChange={handleFileChange}
+      />
+      <input
+        ref={galleryInputRef}
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        className="hidden"
+        onChange={handleFileChange}
+      />
+
       <header className="px-1">
         <h1 className="font-serif text-[30px] font-medium tracking-tight">
           Spot it.
@@ -117,7 +157,7 @@ export default function ShotPage() {
       </header>
 
       <button
-        onClick={startAnalysis}
+        onClick={() => cameraInputRef.current?.click()}
         className="tap-scale relative mt-6 flex min-h-[58vh] flex-col items-center justify-center gap-4 overflow-hidden rounded-[32px] bg-foreground py-16"
       >
         <span className="absolute left-5 top-5 h-7 w-7 border-l-2 border-t-2 border-background/40 rounded-tl-lg" />
@@ -140,7 +180,7 @@ export default function ShotPage() {
 
       <div className="flex flex-col items-center py-7">
         <button
-          onClick={startAnalysis}
+          onClick={() => galleryInputRef.current?.click()}
           className="tap-scale text-[14px] font-semibold text-foreground-secondary underline-offset-4 hover:underline"
         >
           Aus Galerie wählen

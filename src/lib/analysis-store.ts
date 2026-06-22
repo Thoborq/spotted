@@ -1,5 +1,6 @@
 import type { ProductIcon } from "@/components/ui/ProductThumb";
 import { catalog, type AlternativeRole, type CatalogProduct } from "./catalog";
+import type { AnalysisResult } from "./analysis-types";
 
 export type StoredAlternative = {
   role: AlternativeRole;
@@ -68,6 +69,50 @@ export function createAnalysis(): StoredAnalysis {
   const analysis = buildAnalysis(product, Date.now());
   writeAll([analysis, ...history].slice(0, MAX_ENTRIES));
   return analysis;
+}
+
+/**
+ * Übernimmt ein echtes (oder per Fallback erzeugtes) AnalysisResult aus
+ * /api/analyze in den bestehenden Verlauf/UI-Datenmodell - identische
+ * Persistenz wie createAnalysis(), nur mit echten statt katalog-generierten
+ * Werten befüllt.
+ */
+export function saveAnalysisResult(result: AnalysisResult): StoredAnalysis {
+  const history = readAll();
+  const createdAt = Date.now();
+
+  const analysis: StoredAnalysis = {
+    id: `${createdAt.toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    createdAt,
+    name: result.originalProduct.name,
+    brand: result.brand,
+    category: result.category,
+    confidence: result.confidence,
+    icon: guessIcon(result.category, result.originalProduct.name),
+    tone: Math.floor(Math.random() * 5),
+    original: {
+      store: result.originalProduct.store,
+      price: result.originalProduct.price,
+    },
+    alternatives: [
+      result.alternatives.best,
+      result.alternatives.cheapest,
+      result.alternatives.premium,
+    ],
+  };
+
+  writeAll([analysis, ...history].slice(0, MAX_ENTRIES));
+  return analysis;
+}
+
+function guessIcon(category: string, name: string): ProductIcon {
+  const text = `${category} ${name}`.toLowerCase();
+  if (/schuh|sneaker|shoe|stiefel|boot/.test(text)) return "shoe";
+  if (/shirt|hoodie|jacke|jacket|pullover|mantel|coat/.test(text)) return "shirt";
+  if (/uhr|watch/.test(text)) return "watch";
+  if (/tasche|bag|rucksack/.test(text)) return "bag";
+  if (/gürtel|guertel|belt/.test(text)) return "tag";
+  return "sparkles";
 }
 
 export function getHistory(): StoredAnalysis[] {

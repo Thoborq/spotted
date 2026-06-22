@@ -1,20 +1,27 @@
 import { NextResponse } from "next/server";
 import { parseUploadedImage, UploadError } from "@/lib/upload";
 import { analyzeProductImage } from "@/lib/services/vision-service";
-import { findComparableProducts } from "@/lib/services/product-search-service";
+import {
+  findComparableProducts,
+  searchWithGoogleLens,
+} from "@/lib/services/product-search-service";
 import type { AnalysisResult } from "@/lib/analysis-types";
 
 /**
  * POST /api/analyze
  *
  * Erwartet multipart/form-data mit einem Feld "image".
- * Pipeline: Upload validieren -> Vision-Service (Produkt/Marke/Kategorie
- * erkennen) -> Produktsuche-Service (Preis/Alternativen finden) ->
- * AnalysisResult.
  *
- * Ohne konfigurierte API-Keys (Standardzustand, siehe .env.example)
- * durchlaufen beide Services automatisch ihren Dummy-Fallback - die Route
- * verursacht dann keine echten Kosten und keine externen Aufrufe.
+ * Pipeline (Phase 6 - SerpAPI Google Lens als einziger echter Anbieter):
+ * 1. Upload validieren.
+ * 2. Ist SERPAPI_KEY gesetzt -> echte Bildsuche über Google Lens versuchen.
+ *    Liefert sie ein brauchbares Ergebnis, wird es direkt zurückgegeben.
+ * 3. Sonst (kein Key, Aufruf fehlgeschlagen oder zu wenige Treffer) ->
+ *    saubrer Fallback auf den bestehenden Dummy-Katalog (Vision-Service +
+ *    Produktsuche-Service), identisch zum bisherigen Phase-5-Verhalten.
+ *
+ * Es ist bewusst kein Vision-LLM (OpenAI/Gemini/Claude) im Spiel - SerpAPI
+ * Google Lens identifiziert und vergleicht Preise in einem Schritt.
  */
 export async function POST(request: Request) {
   let formData: FormData;
@@ -38,6 +45,11 @@ export async function POST(request: Request) {
   }
 
   try {
+    const liveResult = await searchWithGoogleLens(image);
+    if (liveResult) {
+      return NextResponse.json(liveResult);
+    }
+
     const identified = await analyzeProductImage(image);
     const search = await findComparableProducts(identified);
 
