@@ -1,39 +1,105 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Camera, ScanSearch } from "lucide-react";
+import { Camera, Check, ScanSearch, Sparkle, Tag } from "lucide-react";
+import { createAnalysis } from "@/lib/analysis-store";
+
+const stages = [
+  { label: "Produkt wird erkannt", icon: ScanSearch },
+  { label: "Marke wird gesucht", icon: Tag },
+  { label: "Alternativen werden verglichen", icon: Sparkle },
+];
+
+const STAGE_DURATION = 1150;
 
 export default function ShotPage() {
   const router = useRouter();
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [stageIndex, setStageIndex] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (stageIndex === null) return;
+
+    if (stageIndex >= stages.length) {
+      const analysis = createAnalysis();
+      router.push(`/analyse/${analysis.id}`);
+      return;
+    }
+
+    const timer = setTimeout(
+      () => setStageIndex((current) => (current ?? 0) + 1),
+      STAGE_DURATION,
+    );
+    return () => clearTimeout(timer);
+  }, [stageIndex, router]);
 
   function startAnalysis() {
-    setIsAnalyzing(true);
-    setTimeout(() => router.push("/analyse"), 1500);
+    setStageIndex(0);
   }
 
-  if (isAnalyzing) {
+  if (stageIndex !== null) {
+    const current = stages[Math.min(stageIndex, stages.length - 1)];
+    const CurrentIcon = current.icon;
+    const progress = (Math.min(stageIndex + 1, stages.length) / stages.length) * 100;
+
     return (
       <div className="fixed inset-0 z-[60] flex flex-col items-center justify-center bg-background px-10 text-center">
         <div className="relative flex h-28 w-28 items-center justify-center">
           <div className="absolute inset-0 animate-spin rounded-full border-2 border-dashed border-accent-strong/50 [animation-duration:3s]" />
           <div className="flex h-20 w-20 items-center justify-center rounded-[28px] bg-accent-soft">
-            <ScanSearch
-              size={36}
+            <CurrentIcon
+              size={34}
               strokeWidth={1.5}
               className="animate-pulse text-accent-foreground"
             />
           </div>
         </div>
+
         <h1 className="mt-8 font-serif text-[22px] font-medium tracking-tight">
-          Wir suchen deinen Look…
+          {current.label}…
         </h1>
         <p className="mt-2 text-[14px] text-foreground-secondary">
-          Produkte werden erkannt und mit Alternativen verglichen.
+          Spotted vergleicht dein Foto mit tausenden Produkten.
         </p>
+
         <div className="mt-7 h-1.5 w-48 overflow-hidden rounded-full bg-border">
-          <div className="h-full w-1/3 rounded-full bg-accent-strong animate-shimmer" />
+          <div
+            className="h-full rounded-full bg-accent-strong transition-all duration-500 ease-out"
+            style={{ width: `${progress}%` }}
+          />
+        </div>
+
+        <div className="mt-9 flex flex-col gap-3 self-stretch">
+          {stages.map((stage, i) => {
+            const isDone = i < stageIndex;
+            const isCurrent = i === stageIndex;
+            return (
+              <div key={stage.label} className="flex items-center gap-3">
+                <div
+                  className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${
+                    isDone
+                      ? "bg-foreground text-background"
+                      : isCurrent
+                        ? "bg-accent-strong text-accent-foreground"
+                        : "bg-surface-secondary text-foreground-tertiary"
+                  }`}
+                >
+                  {isDone ? <Check size={13} strokeWidth={2.5} /> : i + 1}
+                </div>
+                <span
+                  className={`text-[14px] ${
+                    isCurrent
+                      ? "font-semibold text-foreground"
+                      : isDone
+                        ? "text-foreground-secondary"
+                        : "text-foreground-tertiary"
+                  }`}
+                >
+                  {stage.label}
+                </span>
+              </div>
+            );
+          })}
         </div>
       </div>
     );
