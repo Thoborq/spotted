@@ -1,7 +1,7 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 import Link from "next/link";
 
-type Variant = "primary" | "secondary" | "ghost";
+type Variant = "primary" | "secondary" | "ghost" | "text";
 type Size = "lg" | "md" | "sm";
 
 const variantClasses: Record<Variant, string> = {
@@ -9,6 +9,7 @@ const variantClasses: Record<Variant, string> = {
   secondary:
     "bg-accent text-accent-foreground hover:bg-accent-strong shadow-soft",
   ghost: "bg-surface text-foreground border border-border hover:bg-surface-secondary",
+  text: "bg-transparent text-foreground-secondary hover:text-foreground",
 };
 
 const sizeClasses: Record<Size, string> = {

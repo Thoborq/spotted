@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Camera, ChevronRight, ImageIcon, Lightbulb, User } from "lucide-react";
+import { Camera, ChevronRight, Lightbulb, Sparkle, User } from "lucide-react";
 import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import IconButton from "@/components/ui/IconButton";
@@ -10,7 +10,7 @@ export default function SpotPage() {
   return (
     <div className="px-5 pt-4">
       <header className="flex items-center justify-between py-2">
-        <span className="text-[20px] font-extrabold tracking-tight">
+        <span className="font-serif text-[22px] italic tracking-tight">
           Spotted
         </span>
         <IconButton href="/profil">
@@ -18,19 +18,19 @@ export default function SpotPage() {
         </IconButton>
       </header>
 
-      <div className="mt-2">
-        <h1 className="text-[30px] font-bold leading-9 tracking-tight">
-          Guten Tag 👋
+      <div className="mt-3">
+        <h1 className="font-serif text-[32px] font-medium leading-tight tracking-tight">
+          Guten Tag.
         </h1>
-        <p className="mt-1 text-[15px] text-foreground-secondary">
-          Was hast du heute entdeckt?
+        <p className="mt-1.5 text-[15px] text-foreground-secondary">
+          Was hast du heute gespottet?
         </p>
       </div>
 
-      <Link href="/shot" className="tap-scale mt-6 block">
+      <Link href="/shot" className="tap-scale mt-7 block">
         <Card className="flex items-center gap-4 p-5">
-          <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-accent-soft">
-            <Camera size={28} strokeWidth={1.6} className="text-accent-foreground" />
+          <div className="fabric flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-[#F1E8D8] to-[#D7C6A5]">
+            <Camera size={26} strokeWidth={1.5} className="text-foreground/55" />
           </div>
           <div className="flex-1">
             <p className="text-[17px] font-semibold tracking-tight">
@@ -44,25 +44,8 @@ export default function SpotPage() {
         </Card>
       </Link>
 
-      <div className="mt-4 grid grid-cols-2 gap-3">
-        <Link
-          href="/shot"
-          className="tap-scale flex items-center justify-center gap-2 rounded-2xl border border-border bg-surface py-4 text-[14px] font-semibold shadow-soft"
-        >
-          <Camera size={17} strokeWidth={1.8} />
-          Kamera
-        </Link>
-        <Link
-          href="/shot"
-          className="tap-scale flex items-center justify-center gap-2 rounded-2xl border border-border bg-surface py-4 text-[14px] font-semibold shadow-soft"
-        >
-          <ImageIcon size={17} strokeWidth={1.8} />
-          Galerie
-        </Link>
-      </div>
-
-      <div className="mt-8 flex items-center justify-between">
-        <h2 className="text-[18px] font-bold tracking-tight">
+      <div className="mt-9 flex items-center justify-between">
+        <h2 className="text-[12.5px] font-semibold uppercase tracking-[0.08em] text-foreground-tertiary">
           Zuletzt gespottet
         </h2>
         <Link
@@ -73,18 +56,21 @@ export default function SpotPage() {
         </Link>
       </div>
 
-      <div className="-mx-5 mt-3 flex gap-3 overflow-x-auto px-5 pb-1 no-scrollbar">
+      <div className="-mx-5 mt-3.5 flex gap-3.5 overflow-x-auto px-5 pb-1 no-scrollbar">
         {recentSpots.slice(0, 4).map((item) => (
-          <Card key={item.id} className="w-36 shrink-0 p-3">
+          <Card key={item.id} className="w-36 shrink-0 p-3.5">
             <ProductThumb icon={item.icon} tone={item.tone} size="lg" />
-            <p className="mt-2.5 truncate text-[13px] font-semibold">
+            <p className="mt-3 truncate text-[13.5px] font-semibold">
               {item.name}
             </p>
             <p className="truncate text-[12px] text-foreground-secondary">
               {item.brand}
             </p>
             <div className="mt-2">
-              <Badge tone="success">{item.match}% Treffer</Badge>
+              <Badge tone="match">
+                <Sparkle size={10} strokeWidth={2} />
+                {item.match}% Treffer
+              </Badge>
             </div>
           </Card>
         ))}
@@ -93,9 +79,9 @@ export default function SpotPage() {
       <Card className="mt-8 mb-6 flex gap-3 bg-surface-secondary p-4 shadow-none border-transparent">
         <Lightbulb size={20} className="mt-0.5 shrink-0 text-accent-strong" />
         <p className="text-[13px] leading-5 text-foreground-secondary">
-          <span className="font-semibold text-foreground">Tipp:</span> Lade
-          einen Screenshot aus Instagram oder Pinterest hoch — Spotted erkennt
-          auch Bilder aus Apps.
+          <span className="font-serif italic text-foreground">Tipp —</span>{" "}
+          Lade einen Screenshot aus Instagram oder Pinterest hoch — Spotted
+          erkennt auch Bilder aus Apps.
         </p>
       </Card>
     </div>

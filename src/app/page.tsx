@@ -8,22 +8,22 @@ import Button from "@/components/ui/Button";
 const slides = [
   {
     icon: Camera,
-    tone: "from-[#EFE7D8] to-[#D7C6A5]",
-    title: "Erkenne jedes Produkt.",
+    tone: "from-[#F1E8D8] to-[#D7C6A5]",
+    titleLines: ["Erkenne jedes", "Produkt."],
     subtitle:
       "Mach ein Foto oder lade einen Screenshot hoch — Spotted erkennt sofort, was du siehst.",
   },
   {
     icon: ScanSearch,
-    tone: "from-[#E9E4F2] to-[#C9BEE0]",
-    title: "Original oder Alternative?",
+    tone: "from-[#ECE1D3] to-[#C5A47E]",
+    titleLines: ["Original oder", "Alternative?"],
     subtitle:
       "Wir zeigen dir das Original und clevere Alternativen, in Sekunden.",
   },
   {
     icon: Sparkles,
-    tone: "from-[#E3EEEA] to-[#B9D6C9]",
-    title: "Bereit zum Spotten?",
+    tone: "from-[#E8ECE2] to-[#B7C4A8]",
+    titleLines: ["Bereit zum", "Spotten?"],
     subtitle: "Starte jetzt und entdecke Produkte wie nie zuvor.",
   },
 ];
@@ -85,14 +85,18 @@ export default function Onboarding() {
                 className="flex w-full shrink-0 flex-col items-center justify-center px-10 text-center"
               >
                 <div
-                  className={`mb-10 flex h-40 w-40 items-center justify-center rounded-[40px] bg-gradient-to-br ${slide.tone} shadow-soft`}
+                  className={`fabric mb-10 flex h-40 w-40 items-center justify-center rounded-[40px] bg-gradient-to-br ${slide.tone} shadow-soft`}
                 >
-                  <Icon size={56} strokeWidth={1.5} className="text-foreground/60" />
+                  <Icon size={52} strokeWidth={1.4} className="text-foreground/55" />
                 </div>
-                <h1 className="max-w-xs text-[28px] font-bold leading-9 tracking-tight">
-                  {slide.title}
+                <h1 className="max-w-xs font-serif text-[34px] font-medium leading-[1.15] tracking-tight">
+                  {slide.titleLines.map((line) => (
+                    <span key={line} className="block">
+                      {line}
+                    </span>
+                  ))}
                 </h1>
-                <p className="mt-3 max-w-xs text-[16px] leading-6 text-foreground-secondary">
+                <p className="mt-4 max-w-xs text-[16px] leading-6 text-foreground-secondary">
                   {slide.subtitle}
                 </p>
               </div>

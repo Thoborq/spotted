@@ -2,8 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Camera, ImageIcon, ScanSearch, Sparkles } from "lucide-react";
-import Button from "@/components/ui/Button";
+import { Camera, ScanSearch } from "lucide-react";
 
 export default function ShotPage() {
   const router = useRouter();
@@ -16,21 +15,24 @@ export default function ShotPage() {
 
   if (isAnalyzing) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center px-10 text-center">
-        <div className="relative flex h-28 w-28 items-center justify-center rounded-[32px] bg-accent-soft">
-          <ScanSearch
-            size={44}
-            strokeWidth={1.5}
-            className="animate-pulse text-accent-foreground"
-          />
+      <div className="fixed inset-0 z-[60] flex flex-col items-center justify-center bg-background px-10 text-center">
+        <div className="relative flex h-28 w-28 items-center justify-center">
+          <div className="absolute inset-0 animate-spin rounded-full border-2 border-dashed border-accent-strong/50 [animation-duration:3s]" />
+          <div className="flex h-20 w-20 items-center justify-center rounded-[28px] bg-accent-soft">
+            <ScanSearch
+              size={36}
+              strokeWidth={1.5}
+              className="animate-pulse text-accent-foreground"
+            />
+          </div>
         </div>
-        <h1 className="mt-7 text-[20px] font-bold tracking-tight">
-          Spotted analysiert dein Foto…
+        <h1 className="mt-8 font-serif text-[22px] font-medium tracking-tight">
+          Wir suchen deinen Look…
         </h1>
         <p className="mt-2 text-[14px] text-foreground-secondary">
           Produkte werden erkannt und mit Alternativen verglichen.
         </p>
-        <div className="mt-6 h-1.5 w-48 overflow-hidden rounded-full bg-border">
+        <div className="mt-7 h-1.5 w-48 overflow-hidden rounded-full bg-border">
           <div className="h-full w-1/3 rounded-full bg-accent-strong animate-shimmer" />
         </div>
       </div>
@@ -38,9 +40,11 @@ export default function ShotPage() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col px-5 pt-6">
+    <div className="flex flex-col px-5 pt-6">
       <header className="px-1">
-        <h1 className="text-[28px] font-bold tracking-tight">Spot it.</h1>
+        <h1 className="font-serif text-[30px] font-medium tracking-tight">
+          Spot it.
+        </h1>
         <p className="mt-1 text-[15px] text-foreground-secondary">
           Foto aufnehmen oder Screenshot hochladen
         </p>
@@ -48,35 +52,33 @@ export default function ShotPage() {
 
       <button
         onClick={startAnalysis}
-        className="tap-scale mt-6 flex flex-1 flex-col items-center justify-center gap-4 rounded-[32px] border-2 border-dashed border-border bg-surface-secondary/60 py-16"
+        className="tap-scale relative mt-6 flex min-h-[58vh] flex-col items-center justify-center gap-4 overflow-hidden rounded-[32px] bg-foreground py-16"
       >
-        <div className="flex h-20 w-20 items-center justify-center rounded-full bg-surface shadow-soft">
-          <Camera size={32} strokeWidth={1.5} className="text-foreground-secondary" />
+        <span className="absolute left-5 top-5 h-7 w-7 border-l-2 border-t-2 border-background/40 rounded-tl-lg" />
+        <span className="absolute right-5 top-5 h-7 w-7 border-r-2 border-t-2 border-background/40 rounded-tr-lg" />
+        <span className="absolute bottom-5 left-5 h-7 w-7 border-b-2 border-l-2 border-background/40 rounded-bl-lg" />
+        <span className="absolute bottom-5 right-5 h-7 w-7 border-b-2 border-r-2 border-background/40 rounded-br-lg" />
+
+        <div className="flex h-20 w-20 items-center justify-center rounded-full bg-background/10">
+          <Camera size={32} strokeWidth={1.4} className="text-background" />
         </div>
         <div className="text-center">
-          <p className="text-[15px] font-semibold">Tippen zum Aufnehmen</p>
-          <p className="mt-1 text-[13px] text-foreground-tertiary">
-            oder Bild hierher ziehen
+          <p className="text-[15px] font-semibold text-background">
+            Tippen zum Spotten
+          </p>
+          <p className="mt-1 text-[13px] text-background/55">
+            Halte das Produkt mittig im Bild
           </p>
         </div>
       </button>
 
-      <div className="mt-5 flex flex-col gap-3 pb-8">
-        <Button variant="primary" size="lg" className="w-full" onClick={startAnalysis}>
-          <Camera size={18} />
-          Foto aufnehmen
-        </Button>
-        <Button variant="ghost" size="lg" className="w-full" onClick={startAnalysis}>
-          <ImageIcon size={18} />
+      <div className="flex flex-col items-center py-7">
+        <button
+          onClick={startAnalysis}
+          className="tap-scale text-[14px] font-semibold text-foreground-secondary underline-offset-4 hover:underline"
+        >
           Aus Galerie wählen
-        </Button>
-      </div>
-
-      <div className="mb-8 flex items-center gap-2.5 rounded-2xl bg-accent-soft px-4 py-3">
-        <Sparkles size={16} className="shrink-0 text-accent-foreground" />
-        <p className="text-[12.5px] leading-5 text-foreground-secondary">
-          Funktioniert mit Fotos, Screenshots und Bildern aus anderen Apps.
-        </p>
+        </button>
       </div>
     </div>
   );

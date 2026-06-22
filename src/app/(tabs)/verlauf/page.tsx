@@ -10,7 +10,9 @@ export default function VerlaufPage() {
   return (
     <div className="px-5 pt-4">
       <header className="py-2">
-        <h1 className="text-[30px] font-bold tracking-tight">Verlauf</h1>
+        <h1 className="font-serif text-[32px] font-medium tracking-tight">
+          Verlauf
+        </h1>
       </header>
 
       <div className="mt-3 flex items-center gap-2.5 rounded-2xl border border-border bg-surface px-4 py-3 shadow-soft">
@@ -47,7 +49,7 @@ export default function VerlaufPage() {
                         {item.brand} · {item.time}
                       </p>
                     </div>
-                    <Badge tone="success">{item.match}%</Badge>
+                    <Badge tone="match">{item.match}%</Badge>
                     <ChevronRight size={16} className="text-foreground-tertiary" />
                   </div>
                 ))}

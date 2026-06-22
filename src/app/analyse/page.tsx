@@ -1,4 +1,4 @@
-import { ArrowLeft, ExternalLink } from "lucide-react";
+import { ArrowLeft, ExternalLink, Sparkle } from "lucide-react";
 import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
@@ -23,13 +23,16 @@ export default function AnalysePage() {
         <div className="relative">
           <ProductThumb icon={original.icon} tone={original.tone} size="xl" />
           <div className="absolute right-3 top-3">
-            <Badge tone="success">{match}% Treffer</Badge>
+            <Badge tone="match">
+              <Sparkle size={11} strokeWidth={2} />
+              {match}% Treffer
+            </Badge>
           </div>
         </div>
 
         <div className="mt-5">
           <Badge tone="neutral">{category}</Badge>
-          <h2 className="mt-2 text-[24px] font-bold leading-8 tracking-tight">
+          <h2 className="mt-2 font-serif text-[28px] font-medium leading-8 tracking-tight">
             {name}
           </h2>
           <p className="mt-0.5 text-[15px] text-foreground-secondary">
@@ -79,8 +82,8 @@ export default function AnalysePage() {
                 <p className="text-[15px] font-bold tracking-tight">
                   {alt.price}
                 </p>
-                <p className="text-[12px] font-semibold text-[#3E6B43]">
-                  {alt.diff}
+                <p className="text-[11.5px] font-medium text-save">
+                  spart {alt.diff.replace("−", "")}
                 </p>
               </div>
             </Card>
@@ -89,8 +92,8 @@ export default function AnalysePage() {
       </div>
 
       <div className="fixed inset-x-0 bottom-0 hairline-t bg-background/85 backdrop-blur-xl safe-bottom">
-        <div className="mx-auto flex max-w-md gap-3 px-5 py-4">
-          <Button href="/shot" variant="ghost" size="md" className="flex-1">
+        <div className="mx-auto flex items-center justify-between gap-3 px-5 py-4">
+          <Button href="/shot" variant="text" size="md" className="px-3">
             Erneut scannen
           </Button>
           <Button href="/spot" variant="primary" size="md" className="flex-1">
