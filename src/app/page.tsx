@@ -5,9 +5,9 @@ import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { Camera, Sparkles } from "lucide-react";
 import Button from "@/components/ui/Button";
+import BirthdatePicker from "@/components/ui/BirthdatePicker";
 import { isCompleteEmail, saveProfile } from "@/lib/profile";
-
-const today = new Date().toISOString().slice(0, 10);
+import { hasCompletedOnboarding, markOnboardingComplete } from "@/lib/onboarding";
 
 const steps = [
   {
@@ -43,21 +43,29 @@ const INTRO_STEPS = 3;
 
 export default function Onboarding() {
   const router = useRouter();
+  const [ready, setReady] = useState(false);
   const [index, setIndex] = useState(0);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [birthdate, setBirthdate] = useState("");
+  const [birthdate, setBirthdate] = useState<string | null>(null);
   const [emailError, setEmailError] = useState(false);
   const touchStartX = useRef<number | null>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const emailInputRef = useRef<HTMLInputElement>(null);
-  const birthdateInputRef = useRef<HTMLInputElement>(null);
   const isLast = index === steps.length - 1;
   const isIntro = index < INTRO_STEPS;
 
   useEffect(() => {
-    const ref =
-      index === 3 ? nameInputRef : index === 4 ? emailInputRef : index === 5 ? birthdateInputRef : null;
+    if (hasCompletedOnboarding()) {
+      router.replace("/spot");
+      return;
+    }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- gates first paint until the redirect check above has run
+    setReady(true);
+  }, [router]);
+
+  useEffect(() => {
+    const ref = index === 3 ? nameInputRef : index === 4 ? emailInputRef : null;
     if (!ref) return;
     const id = setTimeout(() => ref.current?.focus(), 320);
     return () => clearTimeout(id);
@@ -79,8 +87,14 @@ export default function Onboarding() {
     touchStartX.current = null;
   }
 
+  function skip() {
+    markOnboardingComplete();
+    router.push("/spot");
+  }
+
   function finish() {
-    saveProfile({ name, email, birthdate: birthdate || null });
+    saveProfile({ name, email, birthdate });
+    markOnboardingComplete();
     router.push("/spot");
   }
 
@@ -93,12 +107,14 @@ export default function Onboarding() {
     else goTo(index + 1);
   }
 
+  if (!ready) return null;
+
   return (
     <div className="flex min-h-screen flex-col safe-top">
       <div className="flex justify-end px-6 pt-4">
         {isIntro && (
           <button
-            onClick={() => router.push("/spot")}
+            onClick={skip}
             className="tap-scale text-[14px] font-medium text-foreground-secondary"
           >
             Überspringen
@@ -118,12 +134,15 @@ export default function Onboarding() {
           {steps.map((step, i) => {
             if (step.kind === "name") {
               return (
-                <div key={i} className="flex w-full shrink-0 flex-col px-8 pt-10">
-                  <h1 className="font-serif text-[30px] font-medium leading-[1.15] tracking-tight">
+                <div
+                  key={i}
+                  className="flex w-full shrink-0 flex-col items-center justify-center px-10 text-center"
+                >
+                  <h1 className="max-w-xs font-serif text-[32px] font-medium leading-[1.15] tracking-tight">
                     Wie heißt du?
                   </h1>
-                  <p className="mt-2 text-[15px] leading-6 text-foreground-secondary">
-                    Optional — so sprechen wir dich in der App an.
+                  <p className="mt-3 max-w-xs text-[15px] leading-6 text-foreground-secondary">
+                    So sprechen wir dich in der App an.
                   </p>
                   <input
                     ref={nameInputRef}
@@ -132,7 +151,7 @@ export default function Onboarding() {
                     onKeyDown={(e) => e.key === "Enter" && handleNext()}
                     placeholder="Dein Name"
                     maxLength={30}
-                    className="mt-8 w-full rounded-2xl border border-border bg-surface px-4 py-3.5 text-[17px] text-foreground placeholder:text-foreground-tertiary shadow-soft focus:outline-none focus:ring-2 focus:ring-accent-strong/40"
+                    className="mt-10 w-full max-w-[280px] border-b-2 border-border bg-transparent pb-3 text-center text-[22px] font-medium text-foreground placeholder:text-foreground-tertiary transition-colors focus:border-accent-strong focus:outline-none"
                   />
                 </div>
               );
@@ -140,13 +159,19 @@ export default function Onboarding() {
 
             if (step.kind === "email") {
               return (
-                <div key={i} className="flex w-full shrink-0 flex-col px-8 pt-10">
-                  <h1 className="font-serif text-[30px] font-medium leading-[1.15] tracking-tight">
+                <div
+                  key={i}
+                  className="flex w-full shrink-0 flex-col items-center justify-center px-10 text-center"
+                >
+                  <h1 className="max-w-xs font-serif text-[32px] font-medium leading-[1.15] tracking-tight">
                     Wie lautet deine E-Mail?
                   </h1>
-                  <p className="mt-2 text-[15px] leading-6 text-foreground-secondary">
+                  <p className="mt-3 max-w-xs text-[15px] leading-6 text-foreground-secondary">
                     Damit wir dich über Spotted auf dem Laufenden halten können.
                   </p>
+                  <span className="mt-4 text-[11.5px] font-semibold uppercase tracking-[0.08em] text-accent-strong">
+                    Pflichtfeld
+                  </span>
                   <input
                     ref={emailInputRef}
                     type="email"
@@ -157,12 +182,12 @@ export default function Onboarding() {
                     }}
                     onKeyDown={(e) => e.key === "Enter" && handleNext()}
                     placeholder="du@beispiel.de"
-                    className={`mt-8 w-full rounded-2xl border bg-surface px-4 py-3.5 text-[17px] text-foreground placeholder:text-foreground-tertiary shadow-soft focus:outline-none focus:ring-2 focus:ring-accent-strong/40 ${
-                      emailError ? "border-danger" : "border-border"
+                    className={`mt-3 w-full max-w-[280px] border-b-2 bg-transparent pb-3 text-center text-[22px] font-medium text-foreground placeholder:text-foreground-tertiary transition-colors focus:outline-none ${
+                      emailError ? "border-danger" : "border-border focus:border-accent-strong"
                     }`}
                   />
                   {emailError && (
-                    <p className="mt-2 px-1 text-[12.5px] text-danger">
+                    <p className="mt-2.5 text-[12.5px] text-danger">
                       Bitte gib eine gültige E-Mail-Adresse ein.
                     </p>
                   )}
@@ -172,22 +197,20 @@ export default function Onboarding() {
 
             if (step.kind === "birthdate") {
               return (
-                <div key={i} className="flex w-full shrink-0 flex-col px-8 pt-10">
-                  <h1 className="font-serif text-[30px] font-medium leading-[1.15] tracking-tight">
+                <div
+                  key={i}
+                  className="flex w-full shrink-0 flex-col items-center justify-center px-10 text-center"
+                >
+                  <h1 className="max-w-xs font-serif text-[32px] font-medium leading-[1.15] tracking-tight">
                     Wann hast du Geburtstag?
                   </h1>
-                  <p className="mt-2 text-[15px] leading-6 text-foreground-secondary">
+                  <p className="mt-3 max-w-xs text-[15px] leading-6 text-foreground-secondary">
                     Optional — du kannst das jederzeit später in deinem Profil
                     ändern.
                   </p>
-                  <input
-                    ref={birthdateInputRef}
-                    type="date"
-                    value={birthdate}
-                    onChange={(e) => setBirthdate(e.target.value)}
-                    max={today}
-                    className="mt-8 w-full rounded-2xl border border-border bg-surface px-4 py-3.5 text-[17px] text-foreground placeholder:text-foreground-tertiary shadow-soft focus:outline-none focus:ring-2 focus:ring-accent-strong/40"
-                  />
+                  <div className="mt-10 w-full max-w-[280px]">
+                    <BirthdatePicker value={birthdate} onChange={setBirthdate} />
+                  </div>
                 </div>
               );
             }
@@ -240,7 +263,7 @@ export default function Onboarding() {
             ))}
           </div>
           <Button variant="primary" size="lg" className="w-full" onClick={handleNext}>
-            {isLast ? "Los geht's" : "Weiter"}
+            {isLast ? "App betreten" : "Weiter"}
           </Button>
         </div>
       </div>

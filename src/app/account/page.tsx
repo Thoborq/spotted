@@ -5,24 +5,25 @@ import { useRouter } from "next/navigation";
 import { ArrowLeft, Check } from "lucide-react";
 import IconButton from "@/components/ui/IconButton";
 import Button from "@/components/ui/Button";
+import BirthdatePicker from "@/components/ui/BirthdatePicker";
 import { getProfile, isCompleteEmail, saveProfile } from "@/lib/profile";
-
-const today = new Date().toISOString().slice(0, 10);
 
 export default function AccountPage() {
   const router = useRouter();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [birthdate, setBirthdate] = useState("");
+  const [birthdate, setBirthdate] = useState<string | null>(null);
   const [emailError, setEmailError] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     const profile = getProfile();
     // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing with localStorage, a client-only external system
     setName(profile.name);
     setEmail(profile.email);
-    setBirthdate(profile.birthdate ?? "");
+    setBirthdate(profile.birthdate);
+    setLoaded(true);
   }, []);
 
   function handleSave() {
@@ -30,7 +31,7 @@ export default function AccountPage() {
       setEmailError(true);
       return;
     }
-    saveProfile({ name, email, birthdate: birthdate || null });
+    saveProfile({ name, email, birthdate });
     setSaved(true);
     setTimeout(() => setSaved(false), 1800);
   }
@@ -59,9 +60,14 @@ export default function AccountPage() {
             />
           </div>
           <div>
-            <label className="mb-2 block px-1 text-[12.5px] font-semibold uppercase tracking-[0.08em] text-foreground-tertiary">
-              E-Mail
-            </label>
+            <div className="mb-2 flex items-center justify-between px-1">
+              <label className="text-[12.5px] font-semibold uppercase tracking-[0.08em] text-foreground-tertiary">
+                E-Mail
+              </label>
+              <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-accent-strong">
+                Pflichtfeld
+              </span>
+            </div>
             <input
               type="email"
               value={email}
@@ -84,14 +90,7 @@ export default function AccountPage() {
             <label className="mb-2 block px-1 text-[12.5px] font-semibold uppercase tracking-[0.08em] text-foreground-tertiary">
               Geburtsdatum
             </label>
-            <input
-              type="date"
-              value={birthdate}
-              onChange={(e) => setBirthdate(e.target.value)}
-              max={today}
-              placeholder="Optional"
-              className="w-full rounded-2xl border border-border bg-surface px-4 py-3 text-[15px] text-foreground placeholder:text-foreground-tertiary shadow-soft focus:outline-none focus:ring-2 focus:ring-accent-strong/40"
-            />
+            {loaded && <BirthdatePicker value={birthdate} onChange={setBirthdate} />}
           </div>
         </div>
 
