@@ -158,21 +158,21 @@ export default function ShotPage() {
 
       <button
         onClick={() => cameraInputRef.current?.click()}
-        className="tap-scale relative mt-6 flex min-h-[58vh] flex-col items-center justify-center gap-4 overflow-hidden rounded-[32px] bg-foreground py-16"
+        className="tap-scale relative mt-6 flex min-h-[58vh] flex-col items-center justify-center gap-4 overflow-hidden rounded-[32px] bg-[#111111] py-16 shadow-card ring-1 ring-inset ring-white/10"
       >
-        <span className="absolute left-5 top-5 h-7 w-7 border-l-2 border-t-2 border-background/40 rounded-tl-lg" />
-        <span className="absolute right-5 top-5 h-7 w-7 border-r-2 border-t-2 border-background/40 rounded-tr-lg" />
-        <span className="absolute bottom-5 left-5 h-7 w-7 border-b-2 border-l-2 border-background/40 rounded-bl-lg" />
-        <span className="absolute bottom-5 right-5 h-7 w-7 border-b-2 border-r-2 border-background/40 rounded-br-lg" />
+        <span className="absolute left-5 top-5 h-7 w-7 rounded-tl-lg border-l-2 border-t-2 border-white/40" />
+        <span className="absolute right-5 top-5 h-7 w-7 rounded-tr-lg border-r-2 border-t-2 border-white/40" />
+        <span className="absolute bottom-5 left-5 h-7 w-7 rounded-bl-lg border-b-2 border-l-2 border-white/40" />
+        <span className="absolute bottom-5 right-5 h-7 w-7 rounded-br-lg border-b-2 border-r-2 border-white/40" />
 
-        <div className="flex h-20 w-20 items-center justify-center rounded-full bg-background/10">
-          <Camera size={32} strokeWidth={1.4} className="text-background" />
+        <div className="flex h-20 w-20 items-center justify-center rounded-full bg-white/10">
+          <Camera size={32} strokeWidth={1.4} className="text-white" />
         </div>
         <div className="text-center">
-          <p className="text-[15px] font-semibold text-background">
+          <p className="text-[15px] font-semibold text-white">
             Tippen zum Spotten
           </p>
-          <p className="mt-1 text-[13px] text-background/55">
+          <p className="mt-1 text-[13px] text-white/55">
             Halte das Produkt mittig im Bild
           </p>
         </div>

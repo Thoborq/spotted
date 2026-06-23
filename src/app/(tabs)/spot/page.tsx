@@ -44,7 +44,7 @@ export default function SpotPage() {
 
       <Link href="/shot" className="tap-scale mt-7 block">
         <Card className="flex items-center gap-4 p-5">
-          <div className="fabric flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-[#F1E8D8] to-[#D7C6A5]">
+          <div className="fabric swatch-0 flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl">
             <Camera size={26} strokeWidth={1.5} className="text-foreground/55" />
           </div>
           <div className="flex-1">

@@ -11,14 +11,8 @@ const icons = {
 
 export type ProductIcon = keyof typeof icons;
 
-// Curated, on-brand swatch palette — warm and muted, no saturated hues.
-const gradients = [
-  "from-[#F1E8D8] to-[#D7C6A5]", // sand
-  "from-[#ECE1D3] to-[#C5A47E]", // clay
-  "from-[#E8ECE2] to-[#B7C4A8]", // sage
-  "from-[#F1E3DD] to-[#D9B3A6]", // dusty rose
-  "from-[#EAE7DF] to-[#C2BAA9]", // stone
-];
+// Curated, on-brand swatch palette — warm and muted, theme-aware via CSS vars.
+const swatches = ["swatch-0", "swatch-1", "swatch-2", "swatch-3", "swatch-4"];
 
 const sizeClasses = {
   sm: "h-12 w-12 rounded-xl",
@@ -41,15 +35,15 @@ export default function ProductThumb({
   className?: string;
 }) {
   const Icon = icons[icon];
-  const gradient = gradients[tone % gradients.length];
+  const swatch = swatches[tone % swatches.length];
   const isLarge = size === "lg" || size === "xl";
 
   return (
     <div
-      className={`fabric flex shrink-0 items-center justify-center bg-gradient-to-br ring-1 ring-inset ring-black/[0.06] ${gradient} ${sizeClasses[size]} ${className}`}
+      className={`fabric flex shrink-0 items-center justify-center ring-1 ring-inset ring-foreground/[0.06] ${swatch} ${sizeClasses[size]} ${className}`}
     >
       {isLarge ? (
-        <div className={`${chipPosition} flex h-9 w-9 items-center justify-center rounded-full bg-white/45 backdrop-blur-sm`}>
+        <div className={`${chipPosition} flex h-9 w-9 items-center justify-center rounded-full bg-background/55 backdrop-blur-sm`}>
           <Icon className="text-foreground/55" strokeWidth={1.5} size={17} />
         </div>
       ) : (

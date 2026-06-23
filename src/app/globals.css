@@ -18,6 +18,17 @@
   --match-fg: #56654c;
   --save-fg: #8a6f3f;
 
+  --swatch-0-from: #f1e8d8;
+  --swatch-0-to: #d7c6a5;
+  --swatch-1-from: #ece1d3;
+  --swatch-1-to: #c5a47e;
+  --swatch-2-from: #e8ece2;
+  --swatch-2-to: #b7c4a8;
+  --swatch-3-from: #f1e3dd;
+  --swatch-3-to: #d9b3a6;
+  --swatch-4-from: #eae7df;
+  --swatch-4-to: #c2baa9;
+
   --font-display: var(--font-inter), -apple-system, BlinkMacSystemFont,
     "SF Pro Display", "SF Pro Text", system-ui, sans-serif;
   --font-editorial: var(--font-fraunces), "Iowan Old Style", Georgia, serif;
@@ -26,6 +37,41 @@
     0 8px 24px -8px rgba(120, 100, 70, 0.16);
   --shadow-card: 0 1px 1px rgba(17, 17, 17, 0.03),
     0 16px 32px -16px rgba(120, 100, 70, 0.22);
+}
+
+.dark {
+  --background: #15130f;
+  --surface: #1d1a15;
+  --surface-secondary: #262219;
+  --foreground: #f3efe7;
+  --foreground-secondary: #b3a99b;
+  --foreground-tertiary: #7c7468;
+  --accent: #9c8158;
+  --accent-strong: #c2a878;
+  --accent-soft: #2d2719;
+  --accent-foreground: #f3efe7;
+  --border: #332d22;
+  --hairline: rgba(255, 255, 255, 0.08);
+  --danger: #e0776a;
+  --match-bg: #232619;
+  --match-fg: #a9c08e;
+  --save-fg: #d9b876;
+
+  --swatch-0-from: #3a3226;
+  --swatch-0-to: #4f4330;
+  --swatch-1-from: #3c2f22;
+  --swatch-1-to: #5a4128;
+  --swatch-2-from: #2c3128;
+  --swatch-2-to: #3e453a;
+  --swatch-3-from: #3a2c2a;
+  --swatch-3-to: #4f3a36;
+  --swatch-4-from: #322f2a;
+  --swatch-4-to: #463f37;
+
+  --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.3),
+    0 8px 24px -8px rgba(0, 0, 0, 0.45);
+  --shadow-card: 0 1px 1px rgba(0, 0, 0, 0.25),
+    0 16px 32px -16px rgba(0, 0, 0, 0.55);
 }
 
 @theme inline {
@@ -54,15 +100,36 @@
 
 html {
   background: var(--background);
+  color-scheme: light;
+}
+
+html.dark {
+  color-scheme: dark;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-display);
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 @layer utilities {
+  .swatch-0 {
+    background-image: linear-gradient(135deg, var(--swatch-0-from), var(--swatch-0-to));
+  }
+  .swatch-1 {
+    background-image: linear-gradient(135deg, var(--swatch-1-from), var(--swatch-1-to));
+  }
+  .swatch-2 {
+    background-image: linear-gradient(135deg, var(--swatch-2-from), var(--swatch-2-to));
+  }
+  .swatch-3 {
+    background-image: linear-gradient(135deg, var(--swatch-3-from), var(--swatch-3-to));
+  }
+  .swatch-4 {
+    background-image: linear-gradient(135deg, var(--swatch-4-from), var(--swatch-4-to));
+  }
   .shadow-soft {
     box-shadow: var(--shadow-soft);
   }
