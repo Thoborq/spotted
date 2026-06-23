@@ -5,13 +5,15 @@ import { useRouter } from "next/navigation";
 import { ArrowLeft, Check } from "lucide-react";
 import IconButton from "@/components/ui/IconButton";
 import Button from "@/components/ui/Button";
-import { getProfile, isValidEmail, saveProfile } from "@/lib/profile";
+import { getProfile, isCompleteEmail, saveProfile } from "@/lib/profile";
+
+const today = new Date().toISOString().slice(0, 10);
 
 export default function AccountPage() {
   const router = useRouter();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [age, setAge] = useState("");
+  const [birthdate, setBirthdate] = useState("");
   const [emailError, setEmailError] = useState(false);
   const [saved, setSaved] = useState(false);
 
@@ -20,15 +22,15 @@ export default function AccountPage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing with localStorage, a client-only external system
     setName(profile.name);
     setEmail(profile.email);
-    setAge(profile.age ? String(profile.age) : "");
+    setBirthdate(profile.birthdate ?? "");
   }, []);
 
   function handleSave() {
-    if (!isValidEmail(email)) {
+    if (!isCompleteEmail(email)) {
       setEmailError(true);
       return;
     }
-    saveProfile({ name, email, age: age ? Number(age) : null });
+    saveProfile({ name, email, birthdate: birthdate || null });
     setSaved(true);
     setTimeout(() => setSaved(false), 1800);
   }
@@ -67,37 +69,35 @@ export default function AccountPage() {
                 setEmail(e.target.value);
                 setEmailError(false);
               }}
-              placeholder="Optional"
+              placeholder="Deine E-Mail-Adresse"
               className={`w-full rounded-2xl border bg-surface px-4 py-3 text-[15px] text-foreground placeholder:text-foreground-tertiary shadow-soft focus:outline-none focus:ring-2 focus:ring-accent-strong/40 ${
                 emailError ? "border-danger" : "border-border"
               }`}
             />
             {emailError && (
               <p className="mt-1.5 px-1 text-[12.5px] text-danger">
-                Das sieht nicht nach einer gültigen E-Mail aus.
+                Bitte gib eine gültige E-Mail-Adresse ein.
               </p>
             )}
           </div>
           <div>
             <label className="mb-2 block px-1 text-[12.5px] font-semibold uppercase tracking-[0.08em] text-foreground-tertiary">
-              Alter
+              Geburtsdatum
             </label>
             <input
-              type="number"
-              inputMode="numeric"
-              value={age}
-              onChange={(e) => setAge(e.target.value)}
+              type="date"
+              value={birthdate}
+              onChange={(e) => setBirthdate(e.target.value)}
+              max={today}
               placeholder="Optional"
-              min={1}
-              max={120}
               className="w-full rounded-2xl border border-border bg-surface px-4 py-3 text-[15px] text-foreground placeholder:text-foreground-tertiary shadow-soft focus:outline-none focus:ring-2 focus:ring-accent-strong/40"
             />
           </div>
         </div>
 
         <p className="mt-5 px-1 text-[12.5px] text-foreground-tertiary">
-          Alle Angaben sind optional und werden ausschließlich lokal auf
-          diesem Gerät gespeichert.
+          Name und Geburtsdatum sind optional. Alle Angaben werden
+          ausschließlich lokal auf diesem Gerät gespeichert.
         </p>
       </div>
 

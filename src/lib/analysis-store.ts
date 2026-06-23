@@ -122,21 +122,3 @@ export function getHistory(): StoredAnalysis[] {
 export function getAnalysisById(id: string): StoredAnalysis | undefined {
   return readAll().find((item) => item.id === id);
 }
-
-const SEED_OFFSETS_MS = [
-  0,
-  1000 * 60 * 60 * 3,
-  1000 * 60 * 60 * 26,
-  1000 * 60 * 60 * 30,
-  1000 * 60 * 60 * 24 * 4,
-];
-
-export function seedHistoryIfEmpty() {
-  if (typeof window === "undefined") return;
-  if (readAll().length > 0) return;
-  const now = Date.now();
-  const seeded = SEED_OFFSETS_MS.map((offset, i) =>
-    buildAnalysis(catalog[i % catalog.length], now - offset),
-  );
-  writeAll(seeded);
-}

@@ -7,17 +7,12 @@ import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import IconButton from "@/components/ui/IconButton";
 import ProductThumb from "@/components/ui/ProductThumb";
-import {
-  getHistory,
-  seedHistoryIfEmpty,
-  type StoredAnalysis,
-} from "@/lib/analysis-store";
+import { getHistory, type StoredAnalysis } from "@/lib/analysis-store";
 
 export default function SpotPage() {
   const [recent, setRecent] = useState<StoredAnalysis[]>([]);
 
   useEffect(() => {
-    seedHistoryIfEmpty();
     // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing with localStorage, a client-only external system
     setRecent(getHistory().slice(0, 4));
   }, []);
@@ -59,20 +54,22 @@ export default function SpotPage() {
         </Card>
       </Link>
 
-      {recent.length > 0 && (
-        <>
-          <div className="mt-9 flex items-center justify-between">
-            <h2 className="text-[12.5px] font-semibold uppercase tracking-[0.08em] text-foreground-tertiary">
-              Zuletzt gespottet
-            </h2>
+      <div className="mt-9">
+        <div className="flex items-center justify-between">
+          <h2 className="text-[12.5px] font-semibold uppercase tracking-[0.08em] text-foreground-tertiary">
+            Zuletzt gespottet
+          </h2>
+          {recent.length > 0 && (
             <Link
               href="/verlauf"
               className="text-[13px] font-medium text-foreground-secondary"
             >
               Alle anzeigen
             </Link>
-          </div>
+          )}
+        </div>
 
+        {recent.length > 0 ? (
           <div className="-mx-5 mt-3.5 flex gap-3.5 overflow-x-auto px-5 pb-1 no-scrollbar">
             {recent.map((item) => (
               <Link key={item.id} href={`/analyse/${item.id}`} className="tap-scale">
@@ -94,8 +91,21 @@ export default function SpotPage() {
               </Link>
             ))}
           </div>
-        </>
-      )}
+        ) : (
+          <Card className="mt-3.5 flex flex-col items-center gap-3 border-transparent bg-surface-secondary px-6 py-9 text-center shadow-none">
+            <div className="fabric swatch-1 flex h-14 w-14 items-center justify-center rounded-2xl">
+              <Sparkle size={22} strokeWidth={1.5} className="text-foreground/55" />
+            </div>
+            <div>
+              <p className="text-[15px] font-semibold">Noch nichts gespottet</p>
+              <p className="mt-1 max-w-[230px] text-[13px] leading-5 text-foreground-secondary">
+                Scanne dein erstes Produkt und sieh, wie Spotted Original und
+                Alternativen findet.
+              </p>
+            </div>
+          </Card>
+        )}
+      </div>
 
       <Card className="mt-8 mb-6 flex gap-3 bg-surface-secondary p-4 shadow-none border-transparent">
         <Lightbulb size={20} className="mt-0.5 shrink-0 text-accent-strong" />

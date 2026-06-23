@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Check, Moon, Sun, SunMoon } from "lucide-react";
+import { ArrowLeft, Check, Moon, Sun } from "lucide-react";
 import Card from "@/components/ui/Card";
 import IconButton from "@/components/ui/IconButton";
 import {
@@ -15,12 +15,11 @@ import {
 const options: { value: ThemePreference; label: string; icon: typeof Sun }[] = [
   { value: "light", label: "Hell", icon: Sun },
   { value: "dark", label: "Dunkel", icon: Moon },
-  { value: "system", label: "System", icon: SunMoon },
 ];
 
 export default function DarstellungPage() {
   const router = useRouter();
-  const [selected, setSelected] = useState<ThemePreference>("system");
+  const [selected, setSelected] = useState<ThemePreference>("light");
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing with localStorage, a client-only external system
@@ -62,10 +61,6 @@ export default function DarstellungPage() {
             </button>
           ))}
         </Card>
-
-        <p className="mt-4 px-1 text-[12.5px] text-foreground-tertiary">
-          {'„System" übernimmt automatisch die Geräteeinstellung und wechselt mit ihr.'}
-        </p>
       </div>
     </div>
   );

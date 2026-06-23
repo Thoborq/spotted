@@ -1,11 +1,13 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { Camera, Sparkles } from "lucide-react";
 import Button from "@/components/ui/Button";
-import { isValidEmail, saveProfile } from "@/lib/profile";
+import { isCompleteEmail, saveProfile } from "@/lib/profile";
+
+const today = new Date().toISOString().slice(0, 10);
 
 const steps = [
   {
@@ -32,18 +34,34 @@ const steps = [
     subtitle:
       "Mach ein Foto oder lade einen Screenshot hoch — Spotted erkennt das Produkt für dich.",
   },
-  { kind: "profile" as const },
+  { kind: "name" as const },
+  { kind: "email" as const },
+  { kind: "birthdate" as const },
 ];
+
+const INTRO_STEPS = 3;
 
 export default function Onboarding() {
   const router = useRouter();
   const [index, setIndex] = useState(0);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [age, setAge] = useState("");
+  const [birthdate, setBirthdate] = useState("");
   const [emailError, setEmailError] = useState(false);
   const touchStartX = useRef<number | null>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const emailInputRef = useRef<HTMLInputElement>(null);
+  const birthdateInputRef = useRef<HTMLInputElement>(null);
   const isLast = index === steps.length - 1;
+  const isIntro = index < INTRO_STEPS;
+
+  useEffect(() => {
+    const ref =
+      index === 3 ? nameInputRef : index === 4 ? emailInputRef : index === 5 ? birthdateInputRef : null;
+    if (!ref) return;
+    const id = setTimeout(() => ref.current?.focus(), 320);
+    return () => clearTimeout(id);
+  }, [index]);
 
   function goTo(i: number) {
     setIndex(Math.max(0, Math.min(steps.length - 1, i)));
@@ -62,19 +80,15 @@ export default function Onboarding() {
   }
 
   function finish() {
-    if (!isValidEmail(email)) {
-      setEmailError(true);
-      return;
-    }
-    saveProfile({
-      name,
-      email,
-      age: age ? Number(age) : null,
-    });
+    saveProfile({ name, email, birthdate: birthdate || null });
     router.push("/spot");
   }
 
   function handleNext() {
+    if (steps[index].kind === "email" && !isCompleteEmail(email)) {
+      setEmailError(true);
+      return;
+    }
     if (isLast) finish();
     else goTo(index + 1);
   }
@@ -82,7 +96,7 @@ export default function Onboarding() {
   return (
     <div className="flex min-h-screen flex-col safe-top">
       <div className="flex justify-end px-6 pt-4">
-        {!isLast && (
+        {isIntro && (
           <button
             onClick={() => router.push("/spot")}
             className="tap-scale text-[14px] font-medium text-foreground-secondary"
@@ -102,72 +116,78 @@ export default function Onboarding() {
           style={{ transform: `translateX(-${index * 100}%)` }}
         >
           {steps.map((step, i) => {
-            if (step.kind === "profile") {
+            if (step.kind === "name") {
               return (
-                <div
-                  key={i}
-                  className="flex w-full shrink-0 flex-col px-8 pt-6"
-                >
-                  <h1 className="font-serif text-[28px] font-medium leading-[1.15] tracking-tight">
-                    Richte dein Profil ein
+                <div key={i} className="flex w-full shrink-0 flex-col px-8 pt-10">
+                  <h1 className="font-serif text-[30px] font-medium leading-[1.15] tracking-tight">
+                    Wie heißt du?
+                  </h1>
+                  <p className="mt-2 text-[15px] leading-6 text-foreground-secondary">
+                    Optional — so sprechen wir dich in der App an.
+                  </p>
+                  <input
+                    ref={nameInputRef}
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleNext()}
+                    placeholder="Dein Name"
+                    maxLength={30}
+                    className="mt-8 w-full rounded-2xl border border-border bg-surface px-4 py-3.5 text-[17px] text-foreground placeholder:text-foreground-tertiary shadow-soft focus:outline-none focus:ring-2 focus:ring-accent-strong/40"
+                  />
+                </div>
+              );
+            }
+
+            if (step.kind === "email") {
+              return (
+                <div key={i} className="flex w-full shrink-0 flex-col px-8 pt-10">
+                  <h1 className="font-serif text-[30px] font-medium leading-[1.15] tracking-tight">
+                    Wie lautet deine E-Mail?
+                  </h1>
+                  <p className="mt-2 text-[15px] leading-6 text-foreground-secondary">
+                    Damit wir dich über Spotted auf dem Laufenden halten können.
+                  </p>
+                  <input
+                    ref={emailInputRef}
+                    type="email"
+                    value={email}
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      setEmailError(false);
+                    }}
+                    onKeyDown={(e) => e.key === "Enter" && handleNext()}
+                    placeholder="du@beispiel.de"
+                    className={`mt-8 w-full rounded-2xl border bg-surface px-4 py-3.5 text-[17px] text-foreground placeholder:text-foreground-tertiary shadow-soft focus:outline-none focus:ring-2 focus:ring-accent-strong/40 ${
+                      emailError ? "border-danger" : "border-border"
+                    }`}
+                  />
+                  {emailError && (
+                    <p className="mt-2 px-1 text-[12.5px] text-danger">
+                      Bitte gib eine gültige E-Mail-Adresse ein.
+                    </p>
+                  )}
+                </div>
+              );
+            }
+
+            if (step.kind === "birthdate") {
+              return (
+                <div key={i} className="flex w-full shrink-0 flex-col px-8 pt-10">
+                  <h1 className="font-serif text-[30px] font-medium leading-[1.15] tracking-tight">
+                    Wann hast du Geburtstag?
                   </h1>
                   <p className="mt-2 text-[15px] leading-6 text-foreground-secondary">
                     Optional — du kannst das jederzeit später in deinem Profil
                     ändern.
                   </p>
-
-                  <div className="mt-8 flex flex-col gap-4">
-                    <div>
-                      <label className="mb-2 block px-1 text-[12.5px] font-semibold uppercase tracking-[0.08em] text-foreground-tertiary">
-                        Name
-                      </label>
-                      <input
-                        value={name}
-                        onChange={(e) => setName(e.target.value)}
-                        placeholder="Wie sollen wir dich nennen?"
-                        maxLength={30}
-                        className="w-full rounded-2xl border border-border bg-surface px-4 py-3 text-[15px] text-foreground placeholder:text-foreground-tertiary shadow-soft focus:outline-none focus:ring-2 focus:ring-accent-strong/40"
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-2 block px-1 text-[12.5px] font-semibold uppercase tracking-[0.08em] text-foreground-tertiary">
-                        E-Mail
-                      </label>
-                      <input
-                        type="email"
-                        value={email}
-                        onChange={(e) => {
-                          setEmail(e.target.value);
-                          setEmailError(false);
-                        }}
-                        placeholder="Optional"
-                        className={`w-full rounded-2xl border bg-surface px-4 py-3 text-[15px] text-foreground placeholder:text-foreground-tertiary shadow-soft focus:outline-none focus:ring-2 focus:ring-accent-strong/40 ${
-                          emailError ? "border-danger" : "border-border"
-                        }`}
-                      />
-                      {emailError && (
-                        <p className="mt-1.5 px-1 text-[12.5px] text-danger">
-                          Das sieht nicht nach einer gültigen E-Mail aus.
-                        </p>
-                      )}
-                    </div>
-                    <div>
-                      <label className="mb-2 block px-1 text-[12.5px] font-semibold uppercase tracking-[0.08em] text-foreground-tertiary">
-                        Alter
-                      </label>
-                      <input
-                        type="number"
-                        inputMode="numeric"
-                        value={age}
-                        onChange={(e) => setAge(e.target.value)}
-                        onKeyDown={(e) => e.key === "Enter" && handleNext()}
-                        placeholder="Optional"
-                        min={1}
-                        max={120}
-                        className="w-full rounded-2xl border border-border bg-surface px-4 py-3 text-[15px] text-foreground placeholder:text-foreground-tertiary shadow-soft focus:outline-none focus:ring-2 focus:ring-accent-strong/40"
-                      />
-                    </div>
-                  </div>
+                  <input
+                    ref={birthdateInputRef}
+                    type="date"
+                    value={birthdate}
+                    onChange={(e) => setBirthdate(e.target.value)}
+                    max={today}
+                    className="mt-8 w-full rounded-2xl border border-border bg-surface px-4 py-3.5 text-[17px] text-foreground placeholder:text-foreground-tertiary shadow-soft focus:outline-none focus:ring-2 focus:ring-accent-strong/40"
+                  />
                 </div>
               );
             }

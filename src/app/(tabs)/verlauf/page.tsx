@@ -2,15 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ChevronRight, Search } from "lucide-react";
+import { ChevronRight, ScanSearch, Search } from "lucide-react";
 import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
+import Button from "@/components/ui/Button";
 import ProductThumb from "@/components/ui/ProductThumb";
-import {
-  getHistory,
-  seedHistoryIfEmpty,
-  type StoredAnalysis,
-} from "@/lib/analysis-store";
+import { getHistory, type StoredAnalysis } from "@/lib/analysis-store";
 import { dayBucket, formatTime, type DayBucket } from "@/lib/format";
 
 const groups: DayBucket[] = ["Heute", "Gestern", "Diese Woche", "Früher"];
@@ -20,7 +17,6 @@ export default function VerlaufPage() {
   const [query, setQuery] = useState("");
 
   useEffect(() => {
-    seedHistoryIfEmpty();
     // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing with localStorage, a client-only external system
     setHistory(getHistory());
   }, []);
@@ -43,25 +39,41 @@ export default function VerlaufPage() {
         </h1>
       </header>
 
-      <div className="mt-3 flex items-center gap-2.5 rounded-2xl border border-border bg-surface px-4 py-3 shadow-soft">
-        <Search size={17} className="text-foreground-tertiary" />
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Verlauf durchsuchen"
-          className="w-full bg-transparent text-[14px] text-foreground placeholder:text-foreground-tertiary focus:outline-none"
-        />
-      </div>
+      {history.length > 0 && (
+        <div className="mt-3 flex items-center gap-2.5 rounded-2xl border border-border bg-surface px-4 py-3 shadow-soft">
+          <Search size={17} className="text-foreground-tertiary" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Verlauf durchsuchen"
+            className="w-full bg-transparent text-[14px] text-foreground placeholder:text-foreground-tertiary focus:outline-none"
+          />
+        </div>
+      )}
+
+      {history.length === 0 && (
+        <div className="flex flex-col items-center gap-4 px-6 py-16 text-center">
+          <div className="fabric swatch-1 flex h-16 w-16 items-center justify-center rounded-2xl">
+            <ScanSearch size={26} strokeWidth={1.5} className="text-foreground/55" />
+          </div>
+          <div>
+            <p className="font-serif text-[19px] font-medium tracking-tight">
+              Noch keine Spots
+            </p>
+            <p className="mt-1.5 max-w-[240px] text-[14px] leading-5 text-foreground-secondary">
+              Dein Verlauf füllt sich, sobald du dein erstes Produkt scannst.
+            </p>
+          </div>
+          <Button href="/shot" variant="primary" size="md" className="mt-2">
+            Jetzt spotten
+          </Button>
+        </div>
+      )}
 
       <div className="mt-6 flex flex-col gap-7 pb-10">
-        {history.length === 0 && (
-          <p className="px-1 text-[14px] text-foreground-secondary">
-            Noch keine Spots — scanne dein erstes Produkt.
-          </p>
-        )}
         {history.length > 0 && filtered.length === 0 && (
           <p className="px-1 text-[14px] text-foreground-secondary">
-            Keine Treffer für „{query}“.
+            {'Keine Treffer für „' + query + '".'}
           </p>
         )}
         {groups.map((day) => {

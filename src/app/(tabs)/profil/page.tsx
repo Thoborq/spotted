@@ -20,7 +20,7 @@ import { getNotificationsOptIn } from "@/lib/notifications";
 import { getThemePreference } from "@/lib/theme";
 import { formatMonthYear } from "@/lib/format";
 
-const themeLabels = { light: "Hell", dark: "Dunkel", system: "System" } as const;
+const themeLabels = { light: "Hell", dark: "Dunkel" } as const;
 
 const settings = [
   { icon: CircleUser, label: "Account", href: "/account" as const },
@@ -36,7 +36,7 @@ export default function ProfilPage() {
   const [spotCount, setSpotCount] = useState(0);
   const [memberSince, setMemberSince] = useState<number | null>(null);
   const [notificationsOn, setNotificationsOn] = useState(false);
-  const [theme, setTheme] = useState<keyof typeof themeLabels>("system");
+  const [theme, setTheme] = useState<keyof typeof themeLabels>("light");
 
   useEffect(() => {
     const profile = getProfile();

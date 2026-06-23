@@ -35,22 +35,10 @@ export const viewport: Viewport = {
 
 const themeBootScript = `(function () {
   try {
-    var KEY = "spotted.theme.v1";
-    var pref = localStorage.getItem(KEY) || "system";
-    var mql = window.matchMedia("(prefers-color-scheme: dark)");
-    function isDark(p) {
-      return p === "dark" || (p === "system" && mql.matches);
-    }
-    function apply(p) {
-      var dark = isDark(p);
-      document.documentElement.classList.toggle("dark", dark);
-      var meta = document.querySelector('meta[name="theme-color"]');
-      if (meta) meta.setAttribute("content", dark ? "#15130f" : "#faf8f5");
-    }
-    apply(pref);
-    mql.addEventListener("change", function () {
-      apply(localStorage.getItem(KEY) || "system");
-    });
+    var dark = localStorage.getItem("spotted.theme.v1") === "dark";
+    document.documentElement.classList.toggle("dark", dark);
+    var meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute("content", dark ? "#15130f" : "#faf8f5");
   } catch (e) {}
 })();`;
 
