@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Sparkles, Camera, Clock, User } from "lucide-react";
+import { ImageUp, Camera, Clock, User } from "lucide-react";
 import type { ComponentType } from "react";
 
 const tabs: {
@@ -10,7 +10,7 @@ const tabs: {
   label: string;
   icon: ComponentType<{ size?: number; strokeWidth?: number; className?: string }>;
 }[] = [
-  { href: "/spot", label: "Spot", icon: Sparkles },
+  { href: "/spot", label: "Spot", icon: ImageUp },
   { href: "/shot", label: "Shot", icon: Camera },
   { href: "/verlauf", label: "Verlauf", icon: Clock },
   { href: "/profil", label: "Profil", icon: User },

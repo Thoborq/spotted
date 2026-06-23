@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Inter, Fraunces } from "next/font/google";
+import SplashGate from "@/components/SplashGate";
 import "./globals.css";
 
 const inter = Inter({
@@ -54,7 +55,7 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col bg-background text-foreground">
         <script dangerouslySetInnerHTML={{ __html: themeBootScript }} />
-        {children}
+        <SplashGate>{children}</SplashGate>
       </body>
     </html>
   );

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { Camera, Sparkles } from "lucide-react";
+import { Camera, Check, ImageUp } from "lucide-react";
 import Button from "@/components/ui/Button";
 import BirthdatePicker from "@/components/ui/BirthdatePicker";
 import { isCompleteEmail, saveProfile } from "@/lib/profile";
@@ -21,22 +21,27 @@ const steps = [
   {
     kind: "intro" as const,
     swatch: "swatch-1",
-    icon: Sparkles,
+    icon: ImageUp,
     titleLines: ["Das ist", "Spot."],
-    subtitle:
-      "Deine Startseite — hier siehst du deine letzten Spots und startest neue Scans.",
+    subtitle: "Lade Screenshots oder Bilder aus deiner Galerie hoch.",
   },
   {
     kind: "intro" as const,
     swatch: "swatch-2",
     icon: Camera,
     titleLines: ["Das ist", "Shot."],
-    subtitle:
-      "Mach ein Foto oder lade einen Screenshot hoch — Spotted erkennt das Produkt für dich.",
+    subtitle: "Fotografiere Produkte direkt mit deiner Kamera.",
   },
   { kind: "name" as const },
   { kind: "email" as const },
   { kind: "birthdate" as const },
+  {
+    kind: "intro" as const,
+    swatch: "swatch-3",
+    icon: Check,
+    titleLines: ["Du bist", "bereit."],
+    subtitle: "Lass uns dein erstes Produkt entdecken.",
+  },
 ];
 
 const INTRO_STEPS = 3;

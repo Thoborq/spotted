@@ -1,24 +1,34 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import Link from "next/link";
-import { Camera, ChevronRight, Lightbulb, Sparkle, User } from "lucide-react";
-import Card from "@/components/ui/Card";
-import Badge from "@/components/ui/Badge";
+import { useRef } from "react";
+import { ImageUp, User } from "lucide-react";
+import Button from "@/components/ui/Button";
 import IconButton from "@/components/ui/IconButton";
-import ProductThumb from "@/components/ui/ProductThumb";
-import { getHistory, type StoredAnalysis } from "@/lib/analysis-store";
+import AnalysisProcessingOverlay from "@/components/AnalysisProcessingOverlay";
+import { useAnalysisFlow } from "@/lib/use-analysis-flow";
 
 export default function SpotPage() {
-  const [recent, setRecent] = useState<StoredAnalysis[]>([]);
+  const { stageIndex, runAnalysis } = useAnalysisFlow();
+  const galleryInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing with localStorage, a client-only external system
-    setRecent(getHistory().slice(0, 4));
-  }, []);
+  function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (file) void runAnalysis(file);
+  }
+
+  if (stageIndex !== null) return <AnalysisProcessingOverlay stageIndex={stageIndex} />;
 
   return (
-    <div className="px-5 pt-4">
+    <div className="flex min-h-full flex-col px-5 pt-4">
+      <input
+        ref={galleryInputRef}
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        className="hidden"
+        onChange={handleFileChange}
+      />
+
       <header className="flex items-center justify-between py-2">
         <span className="font-serif text-[22px] italic tracking-tight">
           Spotted
@@ -33,88 +43,38 @@ export default function SpotPage() {
           Guten Tag.
         </h1>
         <p className="mt-1.5 text-[15px] text-foreground-secondary">
-          Was hast du heute gespottet?
+          Was möchtest du heute spotten?
         </p>
       </div>
 
-      <Link href="/shot" className="tap-scale mt-7 block">
-        <Card className="flex items-center gap-4 p-5">
-          <div className="fabric swatch-0 flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl">
-            <Camera size={26} strokeWidth={1.5} className="text-foreground/55" />
-          </div>
-          <div className="flex-1">
-            <p className="text-[17px] font-semibold tracking-tight">
-              Neues Foto analysieren
-            </p>
-            <p className="mt-0.5 text-[14px] text-foreground-secondary">
-              Foto aufnehmen oder hochladen
-            </p>
-          </div>
-          <ChevronRight size={20} className="text-foreground-tertiary" />
-        </Card>
-      </Link>
-
-      <div className="mt-9">
-        <div className="flex items-center justify-between">
-          <h2 className="text-[12.5px] font-semibold uppercase tracking-[0.08em] text-foreground-tertiary">
-            Zuletzt gespottet
-          </h2>
-          {recent.length > 0 && (
-            <Link
-              href="/verlauf"
-              className="text-[13px] font-medium text-foreground-secondary"
-            >
-              Alle anzeigen
-            </Link>
-          )}
+      <div className="flex flex-1 flex-col items-center justify-center gap-4 px-2 py-10 text-center">
+        <div className="fabric swatch-0 flex h-20 w-20 items-center justify-center rounded-[28px] shadow-soft">
+          <ImageUp size={32} strokeWidth={1.5} className="text-foreground/55" />
         </div>
-
-        {recent.length > 0 ? (
-          <div className="-mx-5 mt-3.5 flex gap-3.5 overflow-x-auto px-5 pb-1 no-scrollbar">
-            {recent.map((item) => (
-              <Link key={item.id} href={`/analyse/${item.id}`} className="tap-scale">
-                <Card className="w-36 shrink-0 p-3.5">
-                  <ProductThumb icon={item.icon} tone={item.tone} size="lg" />
-                  <p className="mt-3 truncate text-[13.5px] font-semibold">
-                    {item.name}
-                  </p>
-                  <p className="truncate text-[12px] text-foreground-secondary">
-                    {item.brand}
-                  </p>
-                  <div className="mt-2">
-                    <Badge tone="match">
-                      <Sparkle size={10} strokeWidth={2} />
-                      {item.confidence}% Treffer
-                    </Badge>
-                  </div>
-                </Card>
-              </Link>
-            ))}
-          </div>
-        ) : (
-          <Card className="mt-3.5 flex flex-col items-center gap-3 border-transparent bg-surface-secondary px-6 py-9 text-center shadow-none">
-            <div className="fabric swatch-1 flex h-14 w-14 items-center justify-center rounded-2xl">
-              <Sparkle size={22} strokeWidth={1.5} className="text-foreground/55" />
-            </div>
-            <div>
-              <p className="text-[15px] font-semibold">Noch nichts gespottet</p>
-              <p className="mt-1 max-w-[230px] text-[13px] leading-5 text-foreground-secondary">
-                Scanne dein erstes Produkt und sieh, wie Spotted Original und
-                Alternativen findet.
-              </p>
-            </div>
-          </Card>
-        )}
+        <div>
+          <p className="font-serif text-[20px] font-medium tracking-tight">
+            Bild auswählen
+          </p>
+          <p className="mt-1.5 max-w-[260px] text-[14px] leading-5 text-foreground-secondary">
+            Lade einen Screenshot oder ein Foto aus deiner Galerie hoch, um
+            ein Produkt zu erkennen.
+          </p>
+        </div>
       </div>
 
-      <Card className="mt-8 mb-6 flex gap-3 bg-surface-secondary p-4 shadow-none border-transparent">
-        <Lightbulb size={20} className="mt-0.5 shrink-0 text-accent-strong" />
-        <p className="text-[13px] leading-5 text-foreground-secondary">
-          <span className="font-serif italic text-foreground">Tipp —</span>{" "}
-          Lade einen Screenshot aus Instagram oder Pinterest hoch — Spotted
-          erkennt auch Bilder aus Apps.
-        </p>
-      </Card>
+      <div className="flex flex-col gap-3 pb-6">
+        <Button
+          variant="primary"
+          size="lg"
+          className="w-full"
+          onClick={() => galleryInputRef.current?.click()}
+        >
+          Foto aus Galerie
+        </Button>
+        <Button href="/shot" variant="ghost" size="lg" className="w-full">
+          Jetzt fotografieren
+        </Button>
+      </div>
     </div>
   );
 }
