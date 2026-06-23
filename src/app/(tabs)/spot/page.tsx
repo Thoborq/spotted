@@ -1,15 +1,23 @@
 "use client";
 
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ImageUp, User } from "lucide-react";
 import Button from "@/components/ui/Button";
 import IconButton from "@/components/ui/IconButton";
 import AnalysisProcessingOverlay from "@/components/AnalysisProcessingOverlay";
 import { useAnalysisFlow } from "@/lib/use-analysis-flow";
+import { getGreeting } from "@/lib/format";
+import { getProfile } from "@/lib/profile";
 
 export default function SpotPage() {
   const { stageIndex, runAnalysis } = useAnalysisFlow();
   const galleryInputRef = useRef<HTMLInputElement>(null);
+  const [greeting, setGreeting] = useState("Guten Tag.");
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- depends on the device's local clock and localStorage, both client-only
+    setGreeting(getGreeting(getProfile().name));
+  }, []);
 
   function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -40,7 +48,7 @@ export default function SpotPage() {
 
       <div className="mt-3">
         <h1 className="font-serif text-[32px] font-medium leading-tight tracking-tight">
-          Guten Tag.
+          {greeting}
         </h1>
         <p className="mt-1.5 text-[15px] text-foreground-secondary">
           Was möchtest du heute spotten?

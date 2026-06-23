@@ -38,3 +38,13 @@ export function formatMonthYear(timestamp: number): string {
     .toLocaleDateString("de-DE", { month: "short", year: "2-digit" })
     .replace(".", "");
 }
+
+export function getGreeting(name: string): string {
+  const hour = new Date().getHours();
+  let base: string;
+  if (hour >= 5 && hour < 12) base = "Guten Morgen";
+  else if (hour >= 12 && hour < 18) base = "Guten Tag";
+  else if (hour >= 18) base = "Guten Abend";
+  else base = "Willkommen zurück";
+  return name ? `${base}, ${name}.` : `${base}.`;
+}
