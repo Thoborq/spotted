@@ -130,7 +130,7 @@ export default function ShotPage() {
   }
 
   return (
-    <div className="flex flex-col px-5 pt-6">
+    <div className="flex flex-col px-5 pt-4">
       <input
         ref={cameraInputRef}
         type="file"
@@ -147,8 +147,8 @@ export default function ShotPage() {
         onChange={handleFileChange}
       />
 
-      <header className="px-1">
-        <h1 className="font-serif text-[30px] font-medium tracking-tight">
+      <header className="py-2">
+        <h1 className="font-serif text-[32px] font-medium tracking-tight">
           Spot it.
         </h1>
         <p className="mt-1 text-[15px] text-foreground-secondary">

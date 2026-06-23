@@ -105,24 +105,26 @@ export default function Onboarding() {
         </div>
       </div>
 
-      <div className="flex flex-col gap-8 px-8 pb-12">
-        <div className="flex items-center justify-center gap-2">
-          {slides.map((_, i) => (
-            <button
-              key={i}
-              aria-label={`Slide ${i + 1}`}
-              onClick={() => goTo(i)}
-              className="tap-scale h-2 rounded-full transition-all"
-              style={{
-                width: i === index ? 20 : 8,
-                backgroundColor: i === index ? "var(--accent-strong)" : "var(--border)",
-              }}
-            />
-          ))}
+      <div className="safe-bottom">
+        <div className="flex flex-col gap-8 px-8 pb-12">
+          <div className="flex items-center justify-center gap-2">
+            {slides.map((_, i) => (
+              <button
+                key={i}
+                aria-label={`Slide ${i + 1}`}
+                onClick={() => goTo(i)}
+                className="tap-scale h-2 rounded-full transition-all"
+                style={{
+                  width: i === index ? 20 : 8,
+                  backgroundColor: i === index ? "var(--accent-strong)" : "var(--border)",
+                }}
+              />
+            ))}
+          </div>
+          <Button variant="primary" size="lg" className="w-full" onClick={handleNext}>
+            {isLast ? "Los geht's" : "Weiter"}
+          </Button>
         </div>
-        <Button variant="primary" size="lg" className="w-full" onClick={handleNext}>
-          {isLast ? "Los geht's" : "Weiter"}
-        </Button>
       </div>
     </div>
   );

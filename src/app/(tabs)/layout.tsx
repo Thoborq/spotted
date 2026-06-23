@@ -7,7 +7,7 @@ export default function TabsLayout({
 }) {
   return (
     <div className="flex min-h-screen flex-col">
-      <div className="flex-1 pb-28">{children}</div>
+      <div className="flex-1 pb-28 safe-top">{children}</div>
       <BottomNav />
     </div>
   );

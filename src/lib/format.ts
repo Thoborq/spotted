@@ -32,3 +32,9 @@ export function formatPrice(value: number): string {
     maximumFractionDigits: 2,
   }).format(value) + " €";
 }
+
+export function formatMonthYear(timestamp: number): string {
+  return new Date(timestamp)
+    .toLocaleDateString("de-DE", { month: "short", year: "2-digit" })
+    .replace(".", "");
+}

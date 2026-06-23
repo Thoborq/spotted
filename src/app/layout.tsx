@@ -18,6 +18,11 @@ export const metadata: Metadata = {
   title: "Spotted",
   description:
     "Foto hochladen, Produkte erkennen, Originale und Alternativen finden.",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "Spotted",
+  },
 };
 
 export const viewport: Viewport = {
