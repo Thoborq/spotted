@@ -1,24 +1,26 @@
 import { NextResponse } from "next/server";
 import { parseUploadedImage, UploadError } from "@/lib/upload";
-import { analyzeProductImage } from "@/lib/services/vision-service";
 import {
-  findComparableProducts,
+  isProductSearchConfigured,
   searchWithGoogleLens,
 } from "@/lib/services/product-search-service";
-import type { AnalysisResult } from "@/lib/analysis-types";
+import type { AnalyzeResponse } from "@/lib/analysis-types";
 
 /**
  * POST /api/analyze
  *
  * Erwartet multipart/form-data mit einem Feld "image".
  *
- * Pipeline (Phase 6 - SerpAPI Google Lens als einziger echter Anbieter):
+ * Ausschließlich echte Produkterkennung über SerpAPI Google Lens - kein
+ * Dummy-/Demo-Ergebnis wird je als echter Treffer zurückgegeben:
+ *
  * 1. Upload validieren.
- * 2. Ist SERPAPI_KEY gesetzt -> echte Bildsuche über Google Lens versuchen.
- *    Liefert sie ein brauchbares Ergebnis, wird es direkt zurückgegeben.
- * 3. Sonst (kein Key, Aufruf fehlgeschlagen oder zu wenige Treffer) ->
- *    saubrer Fallback auf den bestehenden Dummy-Katalog (Vision-Service +
- *    Produktsuche-Service), identisch zum bisherigen Phase-5-Verhalten.
+ * 2. Kein SERPAPI_KEY gesetzt -> { status: "not_configured" }, sofort,
+ *    ohne Foto hochzuladen.
+ * 3. SERPAPI_KEY gesetzt -> echte Bildsuche über Google Lens.
+ *    - Brauchbarer Treffer -> { status: "ok", result }.
+ *    - Kein brauchbarer Treffer oder Aufruf fehlgeschlagen ->
+ *      { status: "no_match" }.
  *
  * Es ist bewusst kein Vision-LLM (OpenAI/Gemini/Claude) im Spiel - SerpAPI
  * Google Lens identifiziert und vergleicht Preise in einem Schritt.
@@ -44,36 +46,20 @@ export async function POST(request: Request) {
     throw error;
   }
 
+  if (!isProductSearchConfigured()) {
+    console.log("[/api/analyze] Kein SERPAPI_KEY gesetzt - echte Suche nicht aktiviert.");
+    return NextResponse.json({ status: "not_configured" } satisfies AnalyzeResponse);
+  }
+
   try {
     const liveResult = await searchWithGoogleLens(image);
     if (liveResult) {
-      return NextResponse.json(liveResult);
+      return NextResponse.json({ status: "ok", result: liveResult } satisfies AnalyzeResponse);
     }
 
-    console.log(
-      "[/api/analyze] Kein Live-Ergebnis von SerpAPI - verwende Dummy-Katalog-Fallback.",
-    );
-
-    const identified = await analyzeProductImage(image);
-    const search = await findComparableProducts(identified);
-
-    const result: AnalysisResult = {
-      originalProduct: {
-        name: identified.name,
-        brand: identified.brand,
-        store: search.original.store,
-        price: search.original.price,
-      },
-      brand: identified.brand,
-      category: identified.category,
-      confidence: identified.confidence,
-      priceRange: search.priceRange,
-      alternatives: search.alternatives,
-    };
-
-    return NextResponse.json(result);
+    return NextResponse.json({ status: "no_match" } satisfies AnalyzeResponse);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unbekannter Fehler bei der Analyse.";
-    return NextResponse.json({ error: message }, { status: 502 });
+    console.error("[/api/analyze] SerpAPI-Aufruf fehlgeschlagen:", error);
+    return NextResponse.json({ status: "no_match" } satisfies AnalyzeResponse);
   }
 }

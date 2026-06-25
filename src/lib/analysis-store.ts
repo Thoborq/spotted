@@ -1,5 +1,5 @@
 import type { ProductIcon } from "@/components/ui/ProductThumb";
-import { catalog, type AlternativeRole, type CatalogProduct } from "./catalog";
+import type { AlternativeRole } from "./catalog";
 import type { AnalysisResult } from "./analysis-types";
 
 export type StoredAlternative = {
@@ -41,41 +41,10 @@ function writeAll(items: StoredAnalysis[]) {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
 }
 
-function buildAnalysis(product: CatalogProduct, createdAt: number): StoredAnalysis {
-  return {
-    id: `${createdAt.toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-    createdAt,
-    name: product.name,
-    brand: product.brand,
-    category: product.category,
-    confidence: product.confidence,
-    icon: product.icon,
-    tone: product.tone,
-    original: { store: product.originalStore, price: product.originalPrice },
-    alternatives: product.alternatives.map((alt) => ({
-      ...alt,
-      savingsPercent: Math.round((1 - alt.price / product.originalPrice) * 100),
-    })),
-  };
-}
-
-export function createAnalysis(): StoredAnalysis {
-  const history = readAll();
-  const index = history.length % catalog.length;
-  let product = catalog[index];
-  if (history[0]?.name === product.name && catalog.length > 1) {
-    product = catalog[(index + 1) % catalog.length];
-  }
-  const analysis = buildAnalysis(product, Date.now());
-  writeAll([analysis, ...history].slice(0, MAX_ENTRIES));
-  return analysis;
-}
-
 /**
- * Übernimmt ein echtes (oder per Fallback erzeugtes) AnalysisResult aus
- * /api/analyze in den bestehenden Verlauf/UI-Datenmodell - identische
- * Persistenz wie createAnalysis(), nur mit echten statt katalog-generierten
- * Werten befüllt.
+ * Übernimmt ein echtes AnalysisResult aus /api/analyze in das bestehende
+ * Verlauf/UI-Datenmodell. Wird ausschließlich mit echten Treffern
+ * aufgerufen - es gibt keinen Dummy-Pfad mehr, der hier landet.
  */
 export function saveAnalysisResult(result: AnalysisResult): StoredAnalysis {
   const history = readAll();

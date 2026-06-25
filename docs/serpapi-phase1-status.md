@@ -1,19 +1,25 @@
 # Spotted — Phase 1: SerpAPI Google Lens (Status)
 
-Stand: Phase 1 abgeschlossen — echte Produkterkennung ist **im Code vollständig
-integriert**, aber **noch nicht live**, weil in keiner Umgebung (lokal oder
-Vercel-Produktion) die nötigen Keys gesetzt sind. Dieses Dokument ersetzt für
-die SerpAPI-Phase die "noch nicht implementiert"-Hinweise in
-[`docs/technical-architecture.md`](technical-architecture.md) — die dort
-beschriebene LLM-Synthese-Schicht (Schritt 2) ist weiterhin **nicht** gebaut,
-das ist mit Absicht: diese Phase ist bewusst SerpAPI pur, kein GPT/Gemini/Claude.
+Stand: echte Produkterkennung ist **im Code vollständig integriert**, aber
+**noch nicht live**, weil in keiner Umgebung (lokal oder Vercel-Produktion)
+die nötigen Keys gesetzt sind. Es gibt **keinen Dummy-Fallback mehr, der als
+echtes Ergebnis angezeigt wird** — ohne Key oder ohne brauchbaren Treffer
+zeigt die App eine klare Meldung statt eines erfundenen Produkts (siehe
+Abschnitt 1). Dieses Dokument ersetzt für die SerpAPI-Phase die "noch nicht
+implementiert"-Hinweise in [`docs/technical-architecture.md`](technical-architecture.md)
+— die dort beschriebene LLM-Synthese-Schicht (Schritt 2) ist weiterhin
+**nicht** gebaut, das ist mit Absicht: diese Phase ist bewusst SerpAPI pur,
+kein GPT/Gemini/Claude.
 
 ---
 
 ## 1. Was tatsächlich integriert ist
 
 Die Pipeline existierte als Code bereits aus einer früheren Phase
-(`4e14d5c`) — diese Iteration hat sie **gehärtet, nicht neu gebaut**:
+(`4e14d5c`) — diese Iteration hat sie **gehärtet und den automatischen
+Dummy-Fallback entfernt**, der zuvor bei fehlendem Key oder zu wenigen
+Treffern unbemerkt ein zufälliges Katalog-Produkt als "Ergebnis" ausgegeben
+hat (das war die Ursache für "Adidas-Hose hochgeladen → Uhr angezeigt"):
 
 ```
 Foto (Spot-Galerie oder Shot-Kamera)
@@ -21,26 +27,30 @@ Foto (Spot-Galerie oder Shot-Kamera)
     ▼
 POST /api/analyze  (src/app/api/analyze/route.ts)
     │
-    ▼
+    ├─ kein SERPAPI_KEY ──────────────→ { status: "not_configured" }
+    │                                    UI: "Echte Suche noch nicht aktiviert"
+    │
+    ▼ (Key gesetzt)
 searchWithGoogleLens()  (src/lib/services/product-search-service.ts)
     1. Foto kurz über Vercel Blob hochladen (öffentliche URL nötig für SerpAPI)
     2. SerpAPI engine=google_lens mit dieser URL aufrufen
     3. Blob sofort wieder löschen (auch bei Fehler, via finally)
     4. visual_matches mit Preis filtern, mind. 4 nötig
     │
-    ├─ ≥4 preisgelistete Treffer ─→ ECHTES Ergebnis zurückgeben
-    │                                (kein Dummy-Code wird mehr berührt)
+    ├─ ≥4 preisgelistete Treffer ──→ { status: "ok", result }
+    │                                  UI: echtes Ergebnis im Analyse-Screen
     │
-    └─ <4 Treffer / kein Key / API-Fehler ─→ null
-         │
-         ▼
-       Dummy-Katalog-Fallback (catalog.ts, unverändert aus Phase 3)
+    └─ <4 Treffer / API-Fehler ────→ { status: "no_match" }
+                                       UI: "Kein Ergebnis gefunden"
 ```
 
-**Wenn SerpAPI ≥4 preisgelistete visuelle Treffer liefert, werden NIE wieder
-Dummy-Daten angezeigt** — der Fallback-Code wird in diesem Fall überhaupt
-nicht ausgeführt (`if (liveResult) return NextResponse.json(liveResult);` in
-`route.ts`, vor jedem Dummy-Aufruf).
+Es gibt **keinen Code-Pfad mehr, der ein erfundenes Produkt als Ergebnis
+zurückgibt.** Die früheren Dummy-Generatoren (`createAnalysis()` im
+Verlauf-Store, `findComparableProducts()`/`dummyProductSearch()` im
+Produktsuche-Service) wurden entfernt, weil sie nach dieser Änderung
+keinen Aufrufer mehr hatten. `vision-service.ts` (reserviert für eine
+spätere LLM-Phase) bleibt unverändert liegen, wird aber von `route.ts`
+nicht mehr aufgerufen.
 
 ### Was aus den echten Treffern abgeleitet wird
 
@@ -78,8 +88,8 @@ Original + 3 voneinander verschiedene Alternativen.
 
 Aktuell **lokal und in Vercel-Produktion: keine der beiden Variablen
 gesetzt** (verifiziert via `vercel env ls` → "No Environment Variables
-found"). Das ist der alleinige Grund, warum bisher jeder Scan auf den
-Dummy-Katalog zurückfällt — nicht ein Fehler im Code.
+found"). Das ist der alleinige Grund, warum Spot/Shot aktuell "Echte Suche
+noch nicht aktiviert" zeigen — nicht ein Fehler im Code.
 
 | Variable | Wie bekommen | Pflicht für echte Erkennung |
 |---|---|---|
@@ -105,15 +115,16 @@ aber sicher.
    ein reales Produktfoto mit sichtbarem Logo/Schriftzug funktioniert am
    verlässlichsten (siehe Abschnitt 6).
 3. Im Vercel-Dashboard unter **Deployments → Functions → Logs** (oder lokal
-   im Terminal bei `npm run dev`) erscheint einer von zwei Log-Einträgen:
-   - `[searchWithGoogleLens] Live-Treffer: "..."` → echter Treffer, Dummy
-     wurde nicht verwendet.
-   - `[searchWithGoogleLens] Zu wenige preisgelistete Treffer (...)` bzw.
-     `[/api/analyze] Kein Live-Ergebnis von SerpAPI - verwende
-     Dummy-Katalog-Fallback.` → SerpAPI hat zu wenig/nichts gefunden, App
-     zeigt bewusst den Dummy-Katalog statt eines leeren Ergebnisses.
-4. Das Ergebnis erscheint im bestehenden Analyse-Screen — unverändertes
-   Layout, nur mit echten Werten befüllt.
+   im Terminal bei `npm run dev`) erscheint einer von drei Log-Einträgen:
+   - `[/api/analyze] Kein SERPAPI_KEY gesetzt - echte Suche nicht aktiviert.`
+     → Key fehlt, App zeigt "Echte Suche noch nicht aktiviert".
+   - `[searchWithGoogleLens] Live-Treffer: "..."` → echter Treffer, das
+     Ergebnis erscheint im bestehenden Analyse-Screen.
+   - `[searchWithGoogleLens] Zu wenige preisgelistete Treffer (...)` →
+     SerpAPI hat zu wenig/nichts gefunden, App zeigt "Kein Ergebnis
+     gefunden" statt eines Ergebnisses.
+4. Bei einem echten Treffer erscheint er im bestehenden Analyse-Screen —
+   unverändertes Layout, nur mit echten Werten befüllt.
 
 ---
 
@@ -161,7 +172,7 @@ GPT/Gemini/Claude-Kosten, da kein LLM verwendet wird.
   Wortstellung falsch sein kann.
 - **Mindestens 4 preisgelistete Treffer nötig.** Seltene, sehr neue oder
   generische No-Name-Produkte liefern oft weniger — App zeigt dann bewusst
-  den Dummy-Katalog statt eines dünnen/unsicheren echten Ergebnisses.
+  "Kein Ergebnis gefunden" statt eines dünnen/unsicheren Ergebnisses.
 - **SerpAPI-Plan ist stufenbasiert, nicht linear.** Bei Wachstum über
   30.000 Suchen/Monat hinaus ist ein individuelles Enterprise-Gespräch
   nötig (siehe `technical-architecture.md`).
@@ -183,7 +194,7 @@ verifiziert**:
 - Eigenmarken kleiner/lokaler Shops ohne große Online-Präsenz
 - Stark beschnittene, unscharfe oder schlecht beleuchtete Fotos
 - Auslaufmodelle/alte Kollektionen, die nicht mehr aktiv gelistet sind
-- Produkte mit wenigen verschiedenen Preisangeboten (< 4 zwingt in den Dummy-Fallback)
+- Produkte mit wenigen verschiedenen Preisangeboten (< 4 führt zu "Kein Ergebnis gefunden")
 
 Diese Einschätzung muss nach den ersten echten Tests (Abschnitt 3) durch
 beobachtete Ergebnisse ersetzt werden.
@@ -192,13 +203,15 @@ beobachtete Ergebnisse ersetzt werden.
 
 ## 7. Sind Dummy-Daten vollständig ersetzt?
 
-**Code-seitig: ja, mit Absicht beibehaltenem Fallback.** Sobald SerpAPI
-einen brauchbaren Treffer liefert, wird der Dummy-Pfad nicht mehr erreicht
-— kein Mischen von echten und erfundenen Daten in einem Ergebnis. Der
-Dummy-Katalog bleibt **bewusst** als Fallback bestehen für: keinen Key,
-SerpAPI-Ausfall, oder zu wenige Treffer — damit ein Scan nie mit einer
-Fehlermeldung statt einem Ergebnis endet.
+**Ja, vollständig.** Es gibt keinen Code-Pfad mehr, der ein Dummy-/Katalog-
+Produkt als Scan-Ergebnis anzeigt — weder serverseitig (`route.ts` ruft die
+alten Dummy-Services nicht mehr auf) noch clientseitig (`useAnalysisFlow`
+hatte zuvor einen Catch-Block, der bei jedem Netzwerk-/Serverfehler
+unbemerkt ein zufälliges Katalog-Produkt erzeugt und angezeigt hat — das
+war die konkrete Ursache des gemeldeten Bugs und wurde entfernt). Jeder
+Scan endet jetzt in genau einem von drei Zuständen: echtes Ergebnis,
+"Echte Suche noch nicht aktiviert", oder "Kein Ergebnis gefunden".
 
-**Praktisch: noch nicht**, weil aktuell nirgends ein `SERPAPI_KEY` gesetzt
-ist — jeder Scan läuft heute zwangsläufig über den Fallback. Das ändert
-sich, sobald die Variablen aus Abschnitt 2 gesetzt sind.
+Aktuell zeigt jeder Scan "Echte Suche noch nicht aktiviert", weil nirgends
+ein `SERPAPI_KEY` gesetzt ist (Abschnitt 2) — das ist der erwartete,
+ehrliche Zustand und kein Fehler.

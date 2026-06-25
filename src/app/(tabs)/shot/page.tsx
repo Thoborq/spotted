@@ -4,9 +4,10 @@ import { useRef } from "react";
 import { Camera } from "lucide-react";
 import { useAnalysisFlow } from "@/lib/use-analysis-flow";
 import AnalysisProcessingOverlay from "@/components/AnalysisProcessingOverlay";
+import AnalysisUnavailable from "@/components/AnalysisUnavailable";
 
 export default function ShotPage() {
-  const { stageIndex, runAnalysis } = useAnalysisFlow();
+  const { stageIndex, outcome, runAnalysis, reset } = useAnalysisFlow();
   const cameraInputRef = useRef<HTMLInputElement>(null);
 
   function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
@@ -16,6 +17,7 @@ export default function ShotPage() {
   }
 
   if (stageIndex !== null) return <AnalysisProcessingOverlay stageIndex={stageIndex} />;
+  if (outcome) return <AnalysisUnavailable outcome={outcome} onDismiss={reset} />;
 
   return (
     <div className="flex flex-col px-5 pt-4">

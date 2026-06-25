@@ -1,23 +1,6 @@
 import { del, put } from "@vercel/blob";
-import { catalog } from "../catalog";
-import type {
-  AlternativeProduct,
-  AnalysisResult,
-  PriceRange,
-  ProductSummary,
-} from "../analysis-types";
+import type { AlternativeProduct, AnalysisResult } from "../analysis-types";
 import type { UploadedImage } from "../upload";
-import type { VisionAnalysis } from "./vision-service";
-
-export type ProductSearchResult = {
-  original: Pick<ProductSummary, "store" | "price">;
-  priceRange: PriceRange;
-  alternatives: {
-    best: AlternativeProduct;
-    cheapest: AlternativeProduct;
-    premium: AlternativeProduct;
-  };
-};
 
 const SERPAPI_ENDPOINT = "https://serpapi.com/search.json";
 // 1 Treffer wird als "Original" verwendet, die übrigen 3 müssen als
@@ -45,7 +28,8 @@ type LensVisualMatch = {
  *
  * Gibt null zurück, wenn kein SERPAPI_KEY gesetzt ist, der Aufruf fehlschlägt
  * oder zu wenige verwertbare (preisgelistete) Treffer gefunden wurden - der
- * Aufrufer fällt dann saubrer auf den Dummy-Katalog zurück.
+ * Aufrufer (route.ts) antwortet dann mit { status: "no_match" } statt
+ * irgendein Ergebnis zu erfinden.
  */
 export async function searchWithGoogleLens(
   image: UploadedImage,
@@ -84,7 +68,7 @@ export async function searchWithGoogleLens(
       );
     } else {
       console.log(
-        `[searchWithGoogleLens] Zu wenige preisgelistete Treffer (${matches.length} visual_matches insgesamt) - falle auf Dummy-Katalog zurück.`,
+        `[searchWithGoogleLens] Zu wenige preisgelistete Treffer (${matches.length} visual_matches insgesamt) - kein echtes Ergebnis.`,
       );
     }
 
@@ -253,37 +237,4 @@ function guessCategory(title: string): string {
   if (/brille|sunglasses|glasses/.test(text)) return "Brille";
   if (/kleid|dress/.test(text)) return "Kleid";
   return "Produkt";
-}
-
-/**
- * Dummy-Fallback: liefert Preis/Alternativen aus dem statischen Katalog,
- * unabhängig vom SERPAPI_KEY-Status. Wird verwendet, wenn searchWithGoogleLens
- * null zurückgibt (kein Key, Aufruf fehlgeschlagen oder zu wenige Treffer).
- */
-export async function findComparableProducts(
-  identified: VisionAnalysis,
-): Promise<ProductSearchResult> {
-  return dummyProductSearch(identified);
-}
-
-function dummyProductSearch(identified: VisionAnalysis): ProductSearchResult {
-  const product =
-    catalog.find((entry) => entry.name === identified.name) ?? catalog[0];
-
-  const alternatives = product.alternatives.map((alt) => ({
-    ...alt,
-    savingsPercent: Math.round((1 - alt.price / product.originalPrice) * 100),
-  }));
-
-  const prices = [product.originalPrice, ...alternatives.map((alt) => alt.price)];
-
-  const [best, cheapest, premium] = (
-    ["best", "cheapest", "premium"] as const
-  ).map((role) => alternatives.find((alt) => alt.role === role)!);
-
-  return {
-    original: { store: product.originalStore, price: product.originalPrice },
-    priceRange: { min: Math.min(...prices), max: Math.max(...prices) },
-    alternatives: { best, cheapest, premium },
-  };
 }

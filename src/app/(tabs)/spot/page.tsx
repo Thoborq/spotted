@@ -5,12 +5,13 @@ import { ImageUp, User } from "lucide-react";
 import Button from "@/components/ui/Button";
 import IconButton from "@/components/ui/IconButton";
 import AnalysisProcessingOverlay from "@/components/AnalysisProcessingOverlay";
+import AnalysisUnavailable from "@/components/AnalysisUnavailable";
 import { useAnalysisFlow } from "@/lib/use-analysis-flow";
 import { getGreeting } from "@/lib/format";
 import { getProfile } from "@/lib/profile";
 
 export default function SpotPage() {
-  const { stageIndex, runAnalysis } = useAnalysisFlow();
+  const { stageIndex, outcome, runAnalysis, reset } = useAnalysisFlow();
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const [greeting, setGreeting] = useState("Guten Tag.");
 
@@ -26,6 +27,7 @@ export default function SpotPage() {
   }
 
   if (stageIndex !== null) return <AnalysisProcessingOverlay stageIndex={stageIndex} />;
+  if (outcome) return <AnalysisUnavailable outcome={outcome} onDismiss={reset} />;
 
   return (
     <div className="flex min-h-full flex-col px-5 pt-4">

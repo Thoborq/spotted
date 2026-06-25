@@ -21,9 +21,9 @@ export type AlternativeProduct = {
 };
 
 /**
- * Gemeinsames Ergebnis-Datenmodell der Analyse-Pipeline.
- * Wird sowohl vom Dummy-Fallback als auch (ab Phase 6) von den echten
- * Vision-/Produktsuche-Services in genau dieser Form zurückgegeben.
+ * Ergebnis-Datenmodell eines echten Treffers aus der Analyse-Pipeline
+ * (SerpAPI Google Lens). Wird ausschließlich für echte Erkennungen
+ * befüllt - nie mit erfundenen/Dummy-Werten.
  */
 export type AnalysisResult = {
   originalProduct: ProductSummary;
@@ -37,3 +37,19 @@ export type AnalysisResult = {
     premium: AlternativeProduct;
   };
 };
+
+/**
+ * Antwortformat von POST /api/analyze. Unterscheidet bewusst zwischen einem
+ * echten Treffer und den beiden Nicht-Treffer-Fällen, damit das Frontend nie
+ * ein erfundenes Ergebnis anstelle einer echten Analyse anzeigt:
+ *
+ * - "ok": echter SerpAPI-Treffer, `result` ist real.
+ * - "not_configured": kein SERPAPI_KEY gesetzt - Produkterkennung ist
+ *   schlicht noch nicht aktiviert.
+ * - "no_match": SerpAPI war erreichbar, hat aber kein verwertbares
+ *   Ergebnis geliefert (zu wenige Treffer, API-Fehler, o.ä.).
+ */
+export type AnalyzeResponse =
+  | { status: "ok"; result: AnalysisResult }
+  | { status: "not_configured" }
+  | { status: "no_match" };
