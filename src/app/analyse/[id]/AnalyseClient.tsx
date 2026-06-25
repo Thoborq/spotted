@@ -70,10 +70,10 @@ export default function AnalyseClient({ id }: { id: string }) {
 
         <div className="mt-5">
           <Badge tone="neutral">{category}</Badge>
-          <h2 className="mt-2 font-serif text-[28px] font-medium leading-8 tracking-tight">
+          <h2 className="mt-2 line-clamp-2 font-serif text-[28px] font-medium leading-8 tracking-tight">
             {name}
           </h2>
-          <p className="mt-0.5 text-[15px] text-foreground-secondary">{brand}</p>
+          <p className="mt-0.5 truncate text-[15px] text-foreground-secondary">{brand}</p>
           <p className="mt-3 inline-flex items-center gap-1.5 text-[13px] font-semibold text-match-fg">
             <ShieldCheck size={14} strokeWidth={2} />
             Vertrauensscore {confidence}%
@@ -85,8 +85,8 @@ export default function AnalyseClient({ id }: { id: string }) {
         </h3>
         <Card className="mt-2.5 flex items-center gap-4 p-4">
           <ProductThumb icon={analysis.icon} tone={analysis.tone} size="md" />
-          <div className="flex-1">
-            <p className="text-[15px] font-semibold">{original.store}</p>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-[15px] font-semibold">{original.store}</p>
             <p className="text-[16px] font-bold tracking-tight">
               {formatPrice(original.price)}
             </p>

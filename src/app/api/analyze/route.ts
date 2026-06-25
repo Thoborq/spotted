@@ -50,6 +50,10 @@ export async function POST(request: Request) {
       return NextResponse.json(liveResult);
     }
 
+    console.log(
+      "[/api/analyze] Kein Live-Ergebnis von SerpAPI - verwende Dummy-Katalog-Fallback.",
+    );
+
     const identified = await analyzeProductImage(image);
     const search = await findComparableProducts(identified);
 

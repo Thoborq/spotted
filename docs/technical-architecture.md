@@ -1,6 +1,12 @@
 # Spotted — Technische Architektur für echte Produkterkennung (Phase 4)
 
-Status: Architekturentscheidung / Dokumentation. **Es ist noch keine echte API integriert** — die App läuft weiterhin mit dem simulierten Analyse-Flow aus Phase 3 (statischer Katalog, `localStorage`-Verlauf). Dieses Dokument hält fest, *wie* die echte Produkterkennung später aufgebaut werden soll, bevor Code dafür geschrieben wird.
+> **Update Phase 6:** Schritt 1 dieses Dokuments (SerpAPI Google Lens) ist
+> inzwischen integriert — siehe [`docs/serpapi-phase1-status.md`](serpapi-phase1-status.md)
+> für den aktuellen Stand, Setup und Grenzen. Die hier beschriebene
+> LLM-Synthese-Schicht (Abschnitt 4, Schritt 2) ist weiterhin **nicht**
+> gebaut — bewusste Entscheidung, SerpAPI zuerst allein zu validieren.
+
+Status: Architekturentscheidung / Dokumentation aus Phase 4, ursprünglich geschrieben bevor Code dafür existierte. Dieses Dokument hält fest, *wie* die echte Produkterkennung aufgebaut werden soll bzw. wurde.
 
 Ziel-Pipeline:
 

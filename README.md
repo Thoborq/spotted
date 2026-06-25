@@ -4,10 +4,10 @@ Foto oder Screenshot hochladen, Produkte erkennen, Originale und Alternativen fi
 
 ## Architektur
 
-Die App hat aktuell zwei parallele, bewusst getrennte Schichten:
+Die App nutzt `/api/analyze`, um Fotos aus **Spot** (Galerie-Upload) und **Shot** (Kamera) zu analysieren:
 
-1. **UI-Flow (Phase 1–3, produktiv)** — `src/app/(tabs)/shot/page.tsx` simuliert den kompletten Scan-Vorgang rein client-seitig über `src/lib/analysis-store.ts` und einen statischen Produktkatalog (`src/lib/catalog.ts`). Ergebnisse werden in `localStorage` gespeichert und im Verlauf/Home-Feed angezeigt. Dieser Flow läuft vollständig ohne Backend und ohne externe API.
-2. **Backend-Infrastruktur (Phase 5, vorbereitet)** — eine eigenständige `/api/analyze`-Route mit Upload-Pipeline und Service-Layer, die strukturell bereits für echte Produkterkennung vorbereitet ist, aber noch nicht in den UI-Flow eingebunden wurde. Details dazu unten und in [`docs/technical-architecture.md`](docs/technical-architecture.md).
+1. **Echte Erkennung (Phase 6, aktiv im Code)** — `searchWithGoogleLens()` schickt das Foto an die SerpAPI Google Lens API und liefert bei ≥4 preisgelisteten visuellen Treffern ein echtes Ergebnis (Produkt, Marke, Kategorie, Preise, Alternativen). Erfordert `SERPAPI_KEY` + `BLOB_READ_WRITE_TOKEN` (siehe unten) — **aktuell in keiner Umgebung gesetzt**, siehe [`docs/serpapi-phase1-status.md`](docs/serpapi-phase1-status.md).
+2. **Dummy-Fallback (Phase 3, unverändert)** — liefert kein SerpAPI-Key oder zu wenige echte Treffer, fällt die Route auf einen statischen Produktkatalog (`src/lib/catalog.ts`) zurück. Ergebnisse werden identisch in `localStorage` gespeichert und im Verlauf angezeigt — UI-seitig kein Unterschied zwischen echtem und Dummy-Ergebnis.
 
 ### `/api/analyze`
 
@@ -35,12 +35,11 @@ Die Route orchestriert zwei Services aus `src/lib/services/`:
 
 ### Fallback-Modus
 
-Beide Services prüfen beim Aufruf, ob die jeweils nötigen API-Keys (siehe unten) gesetzt sind:
+- **`SERPAPI_KEY` gesetzt + ≥4 preisgelistete Google-Lens-Treffer:** echtes Ergebnis, der Dummy-Katalog wird nicht berührt.
+- **Kein Key gesetzt, API-Fehler, oder zu wenige Treffer:** automatischer Fallback auf den Dummy-Katalog — keine Fehlermeldung, keine Kosten, identisches UI.
+- `vision-service.ts` (OPENAI/GEMINI/ANTHROPIC_API_KEY) bleibt bewusst auf "nicht implementiert" — kein LLM in dieser Phase, siehe [`docs/serpapi-phase1-status.md`](docs/serpapi-phase1-status.md).
 
-- **Kein Key gesetzt (Standardzustand):** Es wird automatisch der bestehende Dummy-Katalog verwendet — identisches Verhalten wie der bisherige Phase-3-Flow, keine externen Aufrufe, keine Kosten.
-- **Key gesetzt:** Aktuell wirft der jeweilige Service bewusst einen Fehler ("... noch nicht implementiert (Phase 6)"). Es findet **kein** echter API-Call statt — das verhindert versehentliche Kosten, falls ein Key vorzeitig eingetragen wird, bevor die echte Integration steht.
-
-Die echte Anbindung (SerpAPI Google Lens, sowie OpenAI/Gemini/Claude Vision) ist für Phase 6 vorgesehen — Begründung der Architektur, Anbietervergleich und Kostenrechnung stehen in [`docs/technical-architecture.md`](docs/technical-architecture.md).
+Anbietervergleich, Kostenrechnung und Architekturbegründung: [`docs/technical-architecture.md`](docs/technical-architecture.md). Aktueller Integrationsstatus, Setup-Anleitung und Trefferqualität: [`docs/serpapi-phase1-status.md`](docs/serpapi-phase1-status.md).
 
 ## ENV Setup
 

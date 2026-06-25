@@ -20,7 +20,10 @@ export type ProductSearchResult = {
 };
 
 const SERPAPI_ENDPOINT = "https://serpapi.com/search.json";
-const MIN_PRICED_MATCHES = 3;
+// 1 Treffer wird als "Original" verwendet, die übrigen 3 müssen als
+// eigenständige (nicht mit dem Original oder untereinander identische)
+// Alternativen taugen - siehe buildResultFromMatches.
+const MIN_PRICED_MATCHES = 4;
 
 /** true, sobald SERPAPI_KEY gesetzt ist. */
 export function isProductSearchConfigured(): boolean {
@@ -72,7 +75,20 @@ export async function searchWithGoogleLens(
     }
 
     const data = (await response.json()) as { visual_matches?: LensVisualMatch[] };
-    return buildResultFromMatches(data.visual_matches ?? []);
+    const matches = data.visual_matches ?? [];
+    const result = buildResultFromMatches(matches);
+
+    if (result) {
+      console.log(
+        `[searchWithGoogleLens] Live-Treffer: "${result.originalProduct.name}" (${matches.length} visual_matches, davon mit Preis verwertet).`,
+      );
+    } else {
+      console.log(
+        `[searchWithGoogleLens] Zu wenige preisgelistete Treffer (${matches.length} visual_matches insgesamt) - falle auf Dummy-Katalog zurück.`,
+      );
+    }
+
+    return result;
   } catch (error) {
     console.error("SerpAPI Google Lens Aufruf fehlgeschlagen:", error);
     return null;
@@ -93,22 +109,25 @@ function buildResultFromMatches(matches: LensVisualMatch[]): AnalysisResult | nu
 
   if (priced.length < MIN_PRICED_MATCHES) return null;
 
-  const original = priced[0];
-  const sortedByPrice = [...priced].sort(
+  // Der erste Treffer ist Google Lens' relevantester visueller Match und
+  // wird als "Original" gezeigt. Alternativen kommen bewusst aus dem Rest,
+  // sonst kann "Original" und "Beste Alternative" derselbe Treffer sein.
+  const [original, ...rest] = priced;
+  const sortedByPrice = [...rest].sort(
     (a, b) => a.price.extracted_value - b.price.extracted_value,
   );
 
   const cheapest = sortedByPrice[0];
   const premium = sortedByPrice[sortedByPrice.length - 1];
   const best = sortedByPrice[Math.floor(sortedByPrice.length / 2)];
-  const prices = sortedByPrice.map((match) => match.price.extracted_value);
+  const prices = priced.map((match) => match.price.extracted_value);
 
   const toAlternative = (
     match: LensVisualMatch & { title: string; price: { extracted_value: number } },
     role: AlternativeProduct["role"],
   ): AlternativeProduct => ({
     role,
-    name: match.title,
+    name: cleanTitle(match.title),
     store: match.source ?? "Unbekannter Shop",
     price: match.price.extracted_value,
     savingsPercent: Math.max(
@@ -117,17 +136,22 @@ function buildResultFromMatches(matches: LensVisualMatch[]): AnalysisResult | nu
     ),
   });
 
+  // Marke/Kategorie werden auf dem vollen Originaltitel erkannt, nicht erst
+  // auf dem gekürzten Anzeigenamen - sonst kann cleanTitle die Marke
+  // versehentlich mit abschneiden, falls sie hinter dem Trennzeichen steht.
   const brand = guessBrand(original.title);
+  const category = guessCategory(original.title);
+  const originalName = cleanTitle(original.title);
 
   return {
     originalProduct: {
-      name: original.title,
+      name: originalName,
       brand,
       store: original.source ?? "Unbekannter Shop",
       price: original.price.extracted_value,
     },
     brand,
-    category: "Produkt",
+    category,
     confidence: Math.min(95, 50 + priced.length * 5),
     priceRange: { min: Math.min(...prices), max: Math.max(...prices) },
     alternatives: {
@@ -138,9 +162,97 @@ function buildResultFromMatches(matches: LensVisualMatch[]): AnalysisResult | nu
   };
 }
 
-/** Naive Heuristik: erstes Wort eines Produkttitels ist häufig die Marke. */
+/**
+ * Google-Lens-Titel sind gescrapte Seiten-Titel und können angehängte
+ * Shop-/Site-Namen oder Größen-/Farbangaben enthalten. Ohne echte
+ * Beispieldaten lässt sich kein verlässliches Trennzeichen-Muster
+ * annehmen (riskiert, die Marke mit abzuschneiden) - daher bewusst nur
+ * Whitespace-Trimming. Siehe "Bekannte Grenzen" in der Dokumentation.
+ */
+function cleanTitle(title: string): string {
+  return title.trim();
+}
+
+const KNOWN_BRANDS = [
+  "Adidas Originals",
+  "Adidas",
+  "Nike",
+  "Puma",
+  "Reebok",
+  "New Balance",
+  "Converse",
+  "Vans",
+  "Levi's",
+  "Levis",
+  "Tommy Hilfiger",
+  "Calvin Klein",
+  "Ralph Lauren",
+  "Lacoste",
+  "Hugo Boss",
+  "Boss",
+  "Zara",
+  "H&M",
+  "Uniqlo",
+  "Mango",
+  "COS",
+  "Arket",
+  "Gucci",
+  "Prada",
+  "Louis Vuitton",
+  "Chanel",
+  "Dior",
+  "Balenciaga",
+  "Versace",
+  "Burberry",
+  "The North Face",
+  "Patagonia",
+  "Carhartt",
+  "Champion",
+  "Fila",
+  "Under Armour",
+  "Daniel Wellington",
+  "Fossil",
+  "Casio",
+  "Swatch",
+  "Garmin",
+  "Apple",
+  "Marc O'Polo",
+  "Filippa K",
+  "Acne Studios",
+  "Stüssy",
+  "Supreme",
+] as const;
+
+/**
+ * Sucht einen bekannten Markennamen irgendwo im Titel (nicht nur am Anfang -
+ * gescrapte Titel beginnen oft mit Farbe/Schnitt statt der Marke). Ohne
+ * Treffer bleibt die ursprüngliche Heuristik (erstes Wort) als Fallback.
+ */
 function guessBrand(title: string): string {
+  const lower = title.toLowerCase();
+  const match = KNOWN_BRANDS.find((brand) => lower.includes(brand.toLowerCase()));
+  if (match) return match;
   return title.trim().split(/\s+/)[0] || "Unbekannt";
+}
+
+/**
+ * Leichte Keyword-Heuristik für die Kategorie, da Google Lens selbst keine
+ * Kategorie liefert - nur der Titel steht zur Verfügung. Bewusst kein LLM
+ * (Phase 1 = SerpAPI pur), daher kein Anspruch auf Vollständigkeit.
+ */
+function guessCategory(title: string): string {
+  const text = title.toLowerCase();
+  if (/sneaker|schuh|shoe|stiefel|boot|sandale/.test(text)) return "Schuhe";
+  if (/hoodie|pullover|sweatshirt/.test(text)) return "Hoodie";
+  if (/t-shirt|shirt|top/.test(text)) return "Shirt";
+  if (/jacke|jacket|mantel|coat|parka/.test(text)) return "Jacke";
+  if (/hose|jeans|pants|trousers|chino/.test(text)) return "Hose";
+  if (/uhr|watch/.test(text)) return "Uhr";
+  if (/tasche|bag|rucksack|backpack/.test(text)) return "Tasche";
+  if (/gürtel|guertel|belt/.test(text)) return "Gürtel";
+  if (/brille|sunglasses|glasses/.test(text)) return "Brille";
+  if (/kleid|dress/.test(text)) return "Kleid";
+  return "Produkt";
 }
 
 /**
