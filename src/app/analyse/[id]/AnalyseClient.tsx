@@ -43,10 +43,29 @@ export default function AnalyseClient({ id }: { id: string }) {
     );
   }
 
-  const { name, brand, confidence, category, original, alternatives } = analysis;
+  const { name, brand, confidence, category, original, alternatives, matchQuality } = analysis;
+  const isExact = matchQuality === "exact";
   const sortedAlternatives = roleOrder
     .map((role) => alternatives.find((alt) => alt.role === role))
     .filter((alt): alt is StoredAlternative => Boolean(alt));
+
+  const originalCard = (
+    <Card className="mt-2.5 flex items-center gap-4 p-4">
+      <ProductThumb icon={analysis.icon} tone={analysis.tone} size="md" src={analysis.imageUrl} />
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-[15px] font-semibold">{original.store}</p>
+        <p className="text-[16px] font-bold tracking-tight">
+          {formatPrice(original.price)}
+        </p>
+      </div>
+      {original.link && (
+        <span className="flex shrink-0 items-center gap-1 text-[13px] font-medium text-foreground-secondary">
+          <ExternalLink size={14} />
+          Shop
+        </span>
+      )}
+    </Card>
+  );
 
   return (
     <div className="flex min-h-screen flex-col safe-top">
@@ -81,23 +100,24 @@ export default function AnalyseClient({ id }: { id: string }) {
         </div>
 
         <h3 className="mt-7 px-0.5 text-[13px] font-semibold uppercase tracking-wide text-foreground-tertiary">
-          Original
+          {isExact ? "Original" : "Ähnliches Produkt"}
         </h3>
-        <Card className="mt-2.5 flex items-center gap-4 p-4">
-          <ProductThumb icon={analysis.icon} tone={analysis.tone} size="md" src={analysis.imageUrl} />
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-[15px] font-semibold">{original.store}</p>
-            <p className="text-[16px] font-bold tracking-tight">
-              {formatPrice(original.price)}
-            </p>
-          </div>
-          {original.link && (
-            <Button href={original.link} variant="ghost" size="sm">
-              <ExternalLink size={14} />
-              Shop
-            </Button>
-          )}
-        </Card>
+        {!isExact && (
+          <p className="mt-1 px-0.5 text-[12px] text-foreground-tertiary">
+            Exaktes Produkt nicht gefunden – ähnliche EU-Angebote
+          </p>
+        )}
+
+        {original.link ? (
+          <a
+            href={original.link}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block"
+          >
+            {originalCard}
+          </a>
+        ) : originalCard}
 
         <div className="mt-7 flex items-center justify-between px-0.5">
           <h3 className="text-[13px] font-semibold uppercase tracking-wide text-foreground-tertiary">

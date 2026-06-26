@@ -1,5 +1,5 @@
 import { del, issueSignedToken, presignUrl, put } from "@vercel/blob";
-import type { AlternativeProduct, AnalysisResult } from "../analysis-types";
+import type { AlternativeProduct, AnalysisResult, MatchQuality } from "../analysis-types";
 import type { UploadedImage } from "../upload";
 
 const SERPAPI_ENDPOINT = "https://serpapi.com/search.json";
@@ -15,8 +15,8 @@ function getOpenAIKey(): string | undefined {
 
 // ---------------------------------------------------------------------------
 // Currency normalization
-// SerpAPI Lens uses "€"/"$"/"£", Shopping uses "EUR"/"USD"/"GBP".
-// Also handles missing currency field (common in Lens visual_matches).
+// Lens uses symbols ("€","$","£"), Shopping uses ISO codes ("EUR","USD","GBP").
+// Also handles missing currency (common in Lens visual_matches).
 // ---------------------------------------------------------------------------
 
 function normalizeCurrency(raw: string | undefined | null): string {
@@ -29,12 +29,7 @@ function normalizeCurrency(raw: string | undefined | null): string {
 }
 
 // ---------------------------------------------------------------------------
-// EU eligibility — strict but correct
-//
-// Accept:  explicit € / EUR currency
-//          OR no currency field but link/source is clearly EU
-// Reject:  explicit non-EUR currency ($, £, etc.)
-//          OR source is in the hard-exclusion list
+// EU eligibility
 // ---------------------------------------------------------------------------
 
 const EU_TLD = /\.(de|at|ch|nl|fr|it|es|be|dk|se|fi|pl|pt|ie|eu)\b/;
@@ -82,28 +77,24 @@ function isEUEligible(m: PricedMatch): boolean {
   // Explicit non-EUR currency → always reject.
   if (currency !== "" && currency !== "€") return false;
 
-  // Hard-exclude known non-EU shops regardless of currency.
+  // Hard-exclude known non-EU shops.
   if (EXCLUDED_SHOP_SOURCES.some((s) =>
     src.includes(s) || href.includes(s.replace(/ /g, ""))
-  )) {
-    return false;
-  }
+  )) return false;
 
   // Explicit EUR → accept.
   if (currency === "€") return true;
 
-  // No currency field: accept only when source is clearly EU.
+  // No currency field — accept only from clearly EU sources.
   if (EU_TLD.test(href)) return true;
   if (KNOWN_EU_SHOP_SOURCES.some((s) => src.includes(s))) return true;
   if (OFFICIAL_BRAND_DOMAINS.some((d) =>
     href.includes(d) && (/\.de\b/.test(href) || /\.com\/(de|eu|at|ch)/.test(href))
   )) return true;
 
-  // Unknown source with no currency → reject (too risky).
   return false;
 }
 
-// Why was a match rejected? Returns a short reason string for debug logs.
 function euRejectReason(m: PricedMatch): string {
   const currency = normalizeCurrency(m.price.currency);
   const src = (m.source ?? "").toLowerCase();
@@ -142,8 +133,8 @@ function shopScore(m: PricedMatch): number {
   const src = (m.source ?? "").toLowerCase();
   const href = (m.link ?? "").toLowerCase();
   const hasImage = Boolean(m.image ?? m.thumbnail);
-
   let score = 0;
+
   const isBrand = OFFICIAL_BRAND_DOMAINS.some((d) => href.includes(d));
   if (isBrand) {
     score = /\.de\b/.test(href) || /\.com\/(de|eu|at|ch)/.test(href) ? 90 : 50;
@@ -198,12 +189,15 @@ type ShoppingApiResult = {
   thumbnail?: string;
   extracted_price?: number;
   currency?: string;
-  price?: string; // fallback string e.g. "59,95 €"
+  price?: string;
 };
 
 type ProductAnalysis = {
-  productType: string;
-  searchQueries: string[];
+  primaryQuery: string;    // e.g. "Polo Ralph Lauren Custom Slim Fit T-Shirt navy red pony"
+  brand: string;           // e.g. "Ralph Lauren"
+  color: string;           // e.g. "navy blau"
+  productType: string;     // e.g. "Polo T-Shirt"
+  fallbackQueries: string[]; // 2–3 simpler variations if primaryQuery yields too few results
 };
 
 type GPTRefinement = {
@@ -215,6 +209,7 @@ type GPTRefinement = {
   brand: string;
   category: string;
   confidence: number;
+  matchQuality: MatchQuality;
 };
 
 // ---------------------------------------------------------------------------
@@ -228,7 +223,7 @@ async function textSearch(query: string, apiKey: string): Promise<PricedMatch[]>
     url.searchParams.set("q", query);
     url.searchParams.set("gl", "de");
     url.searchParams.set("hl", "de");
-    // NOTE: omit "location" — it can conflict with gl=de for shopping results
+    url.searchParams.set("location", "Germany");
     url.searchParams.set("api_key", apiKey);
 
     const response = await fetch(url.toString());
@@ -237,39 +232,32 @@ async function textSearch(query: string, apiKey: string): Promise<PricedMatch[]>
       return [];
     }
 
-    const data = (await response.json()) as {
-      shopping_results?: ShoppingApiResult[];
-    };
+    const data = (await response.json()) as { shopping_results?: ShoppingApiResult[] };
     const raw = data.shopping_results ?? [];
 
     console.log(`[textSearch] "${query}" → ${raw.length} raw results`);
-    raw.slice(0, 6).forEach((r, i) => {
+    raw.slice(0, 5).forEach((r, i) => {
       console.log(
-        `  [${i}] "${(r.title ?? "").slice(0, 45)}" | src="${r.source}" | cur="${r.currency}" | price="${r.price}" | extracted=${r.extracted_price} | link=${(r.link ?? "").slice(0, 60)}`,
+        `  [${i}] "${(r.title ?? "").slice(0, 45)}" | src="${r.source}" | cur="${r.currency}" | price="${r.price}" | ep=${r.extracted_price} | ${(r.link ?? "").slice(0, 70)}`,
       );
     });
 
     return raw
       .map((r): PricedMatch | null => {
         let extractedPrice = r.extracted_price;
-
-        // Fallback: parse from price string (e.g. "59,95 €" or "€59.95")
         if (typeof extractedPrice !== "number" && r.price) {
           const digits = r.price.replace(/[^\d,\.]/g, "").replace(",", ".");
           const parsed = parseFloat(digits);
           if (!isNaN(parsed) && parsed > 0) extractedPrice = parsed;
         }
-
         if (!r.title || typeof extractedPrice !== "number") return null;
 
-        // Normalize currency to "€" / "$" / "£"
         const currency = normalizeCurrency(r.currency) || (
           r.price?.includes("€") ? "€" :
           r.price?.includes("$") ? "$" :
           r.price?.includes("£") ? "£" :
           undefined
         );
-
         return {
           title: r.title,
           source: r.source,
@@ -286,7 +274,7 @@ async function textSearch(query: string, apiKey: string): Promise<PricedMatch[]>
 }
 
 // ---------------------------------------------------------------------------
-// GPT Vision — generate EU-optimized search queries for hard products
+// GPT Vision — analyze image → structured product analysis + precise query
 // ---------------------------------------------------------------------------
 
 async function generateSearchQueries(imageUrl: string): Promise<ProductAnalysis | null> {
@@ -302,25 +290,26 @@ async function generateSearchQueries(imageUrl: string): Promise<ProductAnalysis 
       },
       body: JSON.stringify({
         model: "gpt-4o-mini",
-        max_tokens: 400,
+        max_tokens: 500,
         response_format: { type: "json_object" },
         messages: [
           {
             role: "user",
             content: [
-              { type: "image_url", image_url: { url: imageUrl, detail: "low" } },
+              { type: "image_url", image_url: { url: imageUrl, detail: "high" } },
               {
                 type: "text",
                 text: [
-                  "Analyze this product image for a German price-comparison app.",
-                  'Return JSON: {"productType":"black hooded puffer jacket men","searchQueries":["CP Company black goggle puffer jacket","schwarze Daunenjacke Kapuze Herren","Stone Island black nylon down jacket","Moncler black hooded down jacket","black quilted puffer jacket premium men"]}',
+                  "Analyze this product image precisely. Return JSON:",
+                  '{"primaryQuery":"Polo Ralph Lauren Custom Slim Fit T-Shirt navy blau rotes Pony","brand":"Ralph Lauren","color":"navy blau","productType":"Polo T-Shirt","fallbackQueries":["Polo Ralph Lauren navy T-Shirt Herren","Ralph Lauren Polo Shirt blau"]}',
                   "",
                   "Rules:",
-                  "- productType: concise (color + material + product type + gender if visible)",
-                  "- searchQueries: exactly 5 queries to find this or similar products on EU shops (Zalando, adidas.de, nike.de, Farfetch, Mytheresa…)",
-                  "- Mix: 2 specific brand guesses, 2 generic descriptive queries, 1 German query (Deutsch)",
-                  "- Optimize for findability on German/EU e-commerce sites",
-                  "- If no product recognizable: {\"productType\":\"\",\"searchQueries\":[]}",
+                  "- primaryQuery: ONE precise search query for Google Shopping Germany. Include brand + exact color + product type + distinguishing details (logo type, pattern, cut, material if visible). This is the most important field — make it specific.",
+                  "- brand: exact brand name (e.g. 'Ralph Lauren', 'CP Company', 'Adidas', 'Nike'). 'Unbekannt' if not visible.",
+                  "- color: exact main color in German (e.g. 'navy blau', 'schwarz', 'weiß', 'rot', 'dunkelgrün')",
+                  "- productType: product category in German (e.g. 'Polo T-Shirt', 'Daunenjacke', 'Laufschuhe', 'Jogginghose')",
+                  "- fallbackQueries: 2 simpler queries (brand + color + type, no extra details) for when primaryQuery gives no results",
+                  "- If no product visible: {\"primaryQuery\":\"\",\"brand\":\"Unbekannt\",\"color\":\"\",\"productType\":\"\",\"fallbackQueries\":[]}",
                 ].join("\n"),
               },
             ],
@@ -333,7 +322,6 @@ async function generateSearchQueries(imageUrl: string): Promise<ProductAnalysis 
       console.error(`[generateSearchQueries] OpenAI HTTP ${response.status}`);
       return null;
     }
-
     const data = (await response.json()) as {
       choices?: Array<{ message?: { content?: string } }>;
     };
@@ -341,9 +329,13 @@ async function generateSearchQueries(imageUrl: string): Promise<ProductAnalysis 
     if (!content) return null;
 
     const parsed = JSON.parse(content) as ProductAnalysis;
-    if (!parsed.productType || !Array.isArray(parsed.searchQueries) || parsed.searchQueries.length === 0) {
+    if (!parsed.primaryQuery || !parsed.color || !parsed.productType) {
+      console.warn("[generateSearchQueries] Incomplete GPT response:", parsed);
       return null;
     }
+    console.log(
+      `[generateSearchQueries] brand="${parsed.brand}" color="${parsed.color}" type="${parsed.productType}" | query: "${parsed.primaryQuery}"`,
+    );
     return parsed;
   } catch (err) {
     console.error("[generateSearchQueries] Fehler:", err);
@@ -366,7 +358,10 @@ function deduplicate(matches: PricedMatch[]): PricedMatch[] {
 }
 
 // ---------------------------------------------------------------------------
-// Main export: 3-stage pipeline with full diagnostic logging
+// Main export: 3-stage pipeline
+//
+// GPT image analysis runs in PARALLEL with Lens so color-aware queries
+// are ready for every Shopping search, not just the last-resort stage.
 // ---------------------------------------------------------------------------
 
 export async function searchWithGoogleLens(
@@ -399,7 +394,8 @@ export async function searchWithGoogleLens(
     });
 
     // -----------------------------------------------------------------------
-    // Stage 1: Google Lens
+    // Stage 0: run Lens search AND GPT query generation in PARALLEL.
+    // Lens = visual breadcrumbs; GPT = precise color-aware Shopping query.
     // -----------------------------------------------------------------------
     const lensUrl = new URL(SERPAPI_ENDPOINT);
     lensUrl.searchParams.set("engine", "google_lens");
@@ -408,13 +404,17 @@ export async function searchWithGoogleLens(
     lensUrl.searchParams.set("hl", "de");
     lensUrl.searchParams.set("gl", "de");
 
+    const [lensRespRaw, productAnalysis] = await Promise.all([
+      fetch(lensUrl.toString()),
+      generateSearchQueries(imageUrl),
+    ]);
+
     let lensMatches: LensVisualMatch[] = [];
-    const lensResp = await fetch(lensUrl.toString());
-    if (lensResp.ok) {
-      const lensData = (await lensResp.json()) as { visual_matches?: LensVisualMatch[] };
+    if (lensRespRaw.ok) {
+      const lensData = (await lensRespRaw.json()) as { visual_matches?: LensVisualMatch[] };
       lensMatches = lensData.visual_matches ?? [];
     } else {
-      console.error(`[Stage 1] Lens HTTP ${lensResp.status}`);
+      console.error(`[Stage 0] Lens HTTP ${lensRespRaw.status}`);
     }
 
     const lensPriced = lensMatches.filter(
@@ -423,111 +423,101 @@ export async function searchWithGoogleLens(
     );
     const lensEU = lensPriced.filter(isEUEligible);
 
-    // Diagnostic: log every priced Lens result
     console.log(
-      `[Stage 1] Lens: ${lensMatches.length} total, ${lensPriced.length} priced, ${lensEU.length} EU-eligible`,
+      `[Stage 0] Lens: ${lensMatches.length} total, ${lensPriced.length} priced, ${lensEU.length} EU-eligible`,
+    );
+    console.log(
+      `[Stage 0] GPT: brand="${productAnalysis?.brand ?? "n/a"}" color="${productAnalysis?.color ?? "n/a"}" | query="${productAnalysis?.primaryQuery ?? "n/a"}"`,
     );
     lensPriced.forEach((m, i) => {
       const reason = euRejectReason(m);
       console.log(
-        `  [${i}] "${m.title.slice(0, 45)}" | src="${m.source}" | cur="${m.price.currency}" | val=${m.price.extracted_value} | ${reason} | link=${(m.link ?? "").slice(0, 70)}`,
+        `  L[${i}] "${m.title.slice(0, 45)}" | src="${m.source}" | cur="${m.price.currency}" | ${reason}`,
       );
     });
 
-    if (lensEU.length >= MIN_EU_MATCHES) {
-      const sorted = [...lensEU].sort((a, b) => shopScore(b) - shopScore(a));
-      const result = await finalizeResult(imageUrl, sorted);
-      if (result) return result;
-    }
-
-    // -----------------------------------------------------------------------
-    // Stage 2: Shopping on Lens titles (fast non-AI fallback)
-    // -----------------------------------------------------------------------
+    let allEU: PricedMatch[] = [...lensEU];
     let hadAnyPricedResults = lensPriced.length > 0;
 
-    if (lensPriced.length > 0) {
-      const lensQueries = [...lensPriced]
-        .sort((a, b) => shopScore(b) - shopScore(a))
-        .slice(0, 3)
-        .map((m) => m.title.trim())
-        .filter(Boolean);
+    // -----------------------------------------------------------------------
+    // Stage 1: PRIMARY — Google Shopping with GPT's precise color-aware query.
+    // This is the main source of EU results; Lens is just a supplementary pool.
+    // -----------------------------------------------------------------------
+    if (productAnalysis?.primaryQuery) {
+      console.log(`[Stage 1] Primary Shopping query: "${productAnalysis.primaryQuery}"`);
+      const primary = await textSearch(productAnalysis.primaryQuery, apiKey);
+      const primaryEU = primary.filter(isEUEligible);
+      hadAnyPricedResults = hadAnyPricedResults || primary.length > 0;
 
-      console.log(`[Stage 2] Shopping queries:`, lensQueries);
-
-      const stage2Results = await Promise.all(
-        lensQueries.map((q) => textSearch(q, apiKey)),
-      );
-      const stage2All = stage2Results.flat();
-      const stage2EU = stage2All.filter(isEUEligible);
-
-      console.log(
-        `[Stage 2] ${stage2All.length} Shopping results, ${stage2EU.length} EU-eligible`,
-      );
-      stage2All.forEach((m, i) => {
-        const reason = euRejectReason(m);
-        if (reason !== "passes" && reason !== "passes(eu_tld)" && reason !== "passes(known_eu)") {
-          console.log(
-            `  [${i}] REJECTED: "${m.title.slice(0, 40)}" | src="${m.source}" | cur="${m.price.currency}" | reason=${reason}`,
-          );
+      console.log(`[Stage 1] ${primary.length} results, ${primaryEU.length} EU-eligible`);
+      primary.forEach((m, i) => {
+        const r = euRejectReason(m);
+        if (r !== "passes" && r !== "passes(eu_tld)" && r !== "passes(known_eu)") {
+          console.log(`  P[${i}] REJECTED: "${m.title.slice(0, 40)}" | src="${m.source}" | cur="${m.price.currency}" | ${r}`);
         }
       });
 
-      const merged2 = deduplicate([...lensEU, ...stage2EU]);
-      const sorted2 = merged2.sort((a, b) => shopScore(b) - shopScore(a));
+      allEU = deduplicate([...allEU, ...primaryEU]);
+      console.log(`[Stage 1] Pool after primary: ${allEU.length} EU results`);
 
-      console.log(`[Stage 2] Merged EU: ${sorted2.length}`);
-
-      if (sorted2.length >= MIN_EU_MATCHES) {
-        const result = await finalizeResult(imageUrl, sorted2);
+      if (allEU.length >= MIN_EU_MATCHES) {
+        const sorted = allEU.sort((a, b) => shopScore(b) - shopScore(a));
+        const result = await finalizeResult(imageUrl, sorted, productAnalysis);
         if (result) return result;
       }
     }
 
     // -----------------------------------------------------------------------
-    // Stage 3: GPT Vision → better queries → Shopping
+    // Stage 2: FALLBACK — GPT fallback queries OR top Lens titles (no GPT).
     // -----------------------------------------------------------------------
-    if (!getOpenAIKey()) {
-      console.log(`[Stage 3] Kein OpenAI-Key → kein GPT-Fallback.`);
-      return hadAnyPricedResults ? "no_eu_shop" : null;
-    }
+    const fallbackQueries: string[] =
+      productAnalysis?.fallbackQueries?.filter(Boolean) ??
+      [...lensPriced]
+        .sort((a, b) => shopScore(b) - shopScore(a))
+        .slice(0, 3)
+        .map((m) => m.title.trim())
+        .filter(Boolean);
 
-    const productAnalysis = await generateSearchQueries(imageUrl);
-
-    if (!productAnalysis) {
-      console.log(`[Stage 3] GPT konnte kein Produkt erkennen.`);
-      return hadAnyPricedResults ? "no_eu_shop" : null;
-    }
-
-    console.log(
-      `[Stage 3] GPT: "${productAnalysis.productType}" | Queries:`,
-      productAnalysis.searchQueries,
-    );
-
-    const stage3Results = await Promise.all(
-      productAnalysis.searchQueries.slice(0, 3).map((q) => textSearch(q, apiKey)),
-    );
-    const stage3All = stage3Results.flat();
-    const stage3EU = stage3All.filter(isEUEligible);
-    hadAnyPricedResults = hadAnyPricedResults || stage3All.length > 0;
-
-    console.log(
-      `[Stage 3] ${stage3All.length} Shopping results, ${stage3EU.length} EU-eligible`,
-    );
-
-    const merged3 = deduplicate([...lensEU, ...stage3EU]);
-    const sorted3 = merged3.sort((a, b) => shopScore(b) - shopScore(a));
-
-    console.log(`[Stage 3] Merged EU: ${sorted3.length}`);
-
-    if (sorted3.length < MIN_EU_MATCHES) {
-      console.log(
-        `[searchWithGoogleLens] Alle 3 Stages erschöpft: nur ${sorted3.length} EU-Treffer. → ${hadAnyPricedResults ? "no_eu_shop" : "null"}`,
+    if (fallbackQueries.length > 0) {
+      console.log(`[Stage 2] Fallback queries:`, fallbackQueries);
+      const fallbackResults = await Promise.all(
+        fallbackQueries.slice(0, 3).map((q) => textSearch(q, apiKey)),
       );
-      return hadAnyPricedResults ? "no_eu_shop" : null;
+      const fallbackAll = fallbackResults.flat();
+      const fallbackEU = fallbackAll.filter(isEUEligible);
+      hadAnyPricedResults = hadAnyPricedResults || fallbackAll.length > 0;
+
+      console.log(`[Stage 2] ${fallbackAll.length} results, ${fallbackEU.length} EU-eligible`);
+
+      allEU = deduplicate([...allEU, ...fallbackEU]);
+      console.log(`[Stage 2] Pool after fallback: ${allEU.length} EU results`);
+
+      if (allEU.length >= MIN_EU_MATCHES) {
+        const sorted = allEU.sort((a, b) => shopScore(b) - shopScore(a));
+        const result = await finalizeResult(imageUrl, sorted, productAnalysis);
+        if (result) return result;
+      }
     }
 
-    const result = await finalizeResult(imageUrl, sorted3);
-    return result ?? (hadAnyPricedResults ? "no_eu_shop" : null);
+    // -----------------------------------------------------------------------
+    // Stage 3: LAST RESORT — finalize with whatever EU results we have (≥1).
+    // Better to return an uncertain result than nothing.
+    // -----------------------------------------------------------------------
+    if (allEU.length > 0 && allEU.length < MIN_EU_MATCHES) {
+      // Pad with non-EU priced results (marked shipsFromNonEU later) if needed.
+      const nonEU = lensPriced.filter((m) => !allEU.includes(m));
+      const padded = deduplicate([...allEU, ...nonEU]).slice(0, MIN_EU_MATCHES);
+      if (padded.length >= MIN_EU_MATCHES) {
+        const sorted = padded.sort((a, b) => shopScore(b) - shopScore(a));
+        const result = await finalizeResult(imageUrl, sorted, productAnalysis);
+        if (result) return result;
+      }
+    }
+
+    console.log(
+      `[searchWithGoogleLens] All stages done. hadAnyResults=${hadAnyPricedResults} → ${hadAnyPricedResults ? "no_eu_shop" : "null"}`,
+    );
+    return hadAnyPricedResults ? "no_eu_shop" : null;
   } finally {
     if (blobUrl) {
       await del(blobUrl).catch((err) =>
@@ -538,12 +528,13 @@ export async function searchWithGoogleLens(
 }
 
 // ---------------------------------------------------------------------------
-// Finalize: GPT refinement (9s timeout) → heuristic fallback
+// Finalize: GPT refinement with full product context → heuristic fallback
 // ---------------------------------------------------------------------------
 
 async function finalizeResult(
   imageUrl: string,
   sorted: PricedMatch[],
+  productAnalysis: ProductAnalysis | null,
 ): Promise<AnalysisResult | null> {
   if (sorted.length < MIN_EU_MATCHES) return null;
 
@@ -555,7 +546,7 @@ async function finalizeResult(
   );
 
   const gptResult = await Promise.race([
-    refineWithOpenAI(imageUrl, sorted.slice(0, MAX_GPT_MATCHES)),
+    refineWithOpenAI(imageUrl, sorted.slice(0, MAX_GPT_MATCHES), productAnalysis),
     gptTimeoutPromise,
   ]);
   if (timeoutId !== null) clearTimeout(timeoutId);
@@ -564,17 +555,17 @@ async function finalizeResult(
     console.warn(`[finalizeResult] GPT-Timeout → Heuristik.`);
     return buildResultFromPriced(sorted);
   }
-
   return gptResult;
 }
 
 // ---------------------------------------------------------------------------
-// GPT refinement: picks original / best / cheapest / premium
+// GPT refinement: picks roles and assesses matchQuality with COLOR enforcement
 // ---------------------------------------------------------------------------
 
 async function refineWithOpenAI(
   imageUrl: string,
   priced: PricedMatch[],
+  productAnalysis: ProductAnalysis | null,
 ): Promise<AnalysisResult | null> {
   const apiKey = getOpenAIKey();
   if (!apiKey) return null;
@@ -587,6 +578,14 @@ async function refineWithOpenAI(
     currency: normalizeCurrency(m.price.currency) || "€",
   }));
 
+  const colorContext = productAnalysis
+    ? [
+        `Photo shows: "${productAnalysis.color} ${productAnalysis.productType}" by ${productAnalysis.brand}.`,
+        `COLOR HARD CONSTRAINT: originalIndex MUST be color="${productAnalysis.color}".`,
+        `A "${productAnalysis.color}" item must NOT map to a different color. If no exact color match exists, pick the closest and set matchQuality="similar".`,
+      ].join(" ")
+    : "Match by COLOR first (this is critical — wrong color = wrong product), then product type, then brand.";
+
   try {
     const response = await fetch(OPENAI_ENDPOINT, {
       method: "POST",
@@ -596,7 +595,7 @@ async function refineWithOpenAI(
       },
       body: JSON.stringify({
         model: "gpt-4o-mini",
-        max_tokens: 300,
+        max_tokens: 350,
         response_format: { type: "json_object" },
         messages: [
           {
@@ -606,19 +605,20 @@ async function refineWithOpenAI(
               {
                 type: "text",
                 text: [
-                  "Select entries from EU shop candidates for a German price-comparison app.",
-                  `Candidates (pre-sorted by EU quality, all ship to Germany): ${JSON.stringify(matchList)}`,
+                  `${colorContext}`,
+                  `EU shop candidates (pre-sorted by quality, all ship to Germany): ${JSON.stringify(matchList)}`,
                   "",
-                  'Return JSON: {"originalIndex":0,"bestIndex":1,"cheapestIndex":2,"premiumIndex":3,"productName":"Nike Air Max 97","brand":"Nike","category":"Schuhe","confidence":82}',
+                  'Return JSON: {"originalIndex":0,"bestIndex":1,"cheapestIndex":2,"premiumIndex":3,"productName":"Polo Ralph Lauren Navy T-Shirt","brand":"Ralph Lauren","category":"Shirt","confidence":87,"matchQuality":"exact"}',
                   "",
                   "Rules:",
-                  "- originalIndex: closest visual match to the photo",
-                  "- bestIndex: best value from a German/brand shop (prefer Zalando, About You, Breuninger, adidas.de)",
-                  "- cheapestIndex: lowest price (must differ from original and best)",
+                  "- originalIndex: closest visual match. COLOR IS A HARD CONSTRAINT — a navy shirt must NOT map to a beige or white shirt. If no color match exists, pick the closest and set matchQuality='similar'.",
+                  "- bestIndex: best value from a German/brand shop (Zalando, About You, Breuninger, ralphlauren.com/de preferred)",
+                  "- cheapestIndex: lowest EUR price (must differ from original and best)",
                   "- premiumIndex: premium option — Farfetch, Mytheresa, SSENSE, Mr Porter preferred (must differ from all others)",
                   "- All four indices MUST be different",
-                  "- productName: clean brand + product name only",
-                  "- category: one of Schuhe, Hoodie, Shirt, Jacke, Hose, Uhr, Tasche, Gürtel, Brille, Kleid, Produkt",
+                  "- matchQuality: 'exact' = same color + product type + brand; 'similar' = correct brand/type but different color or close variant; 'uncertain' = rough match only",
+                  "- productName: clean brand + color + product name, no store info",
+                  "- category: Schuhe | Hoodie | Shirt | Jacke | Hose | Uhr | Tasche | Gürtel | Brille | Kleid | Produkt",
                   "- confidence: 50–95",
                 ].join("\n"),
               },
@@ -660,8 +660,12 @@ async function refineWithOpenAI(
       priced.find((m) => m.image ?? m.thumbnail)?.image ??
       priced.find((m) => m.thumbnail)?.thumbnail;
     const bestImg = (m: PricedMatch) => m.image ?? m.thumbnail ?? anyThumb;
-    const brand = gpt.brand?.trim() || guessBrand(original.title);
+    const brand = gpt.brand?.trim() || productAnalysis?.brand || guessBrand(original.title);
     const category = gpt.category?.trim() || guessCategory(original.title);
+    const matchQuality: MatchQuality =
+      gpt.matchQuality === "exact" || gpt.matchQuality === "similar" || gpt.matchQuality === "uncertain"
+        ? gpt.matchQuality
+        : "uncertain";
 
     const toAlt = (match: PricedMatch, role: AlternativeProduct["role"]): AlternativeProduct => ({
       role,
@@ -677,6 +681,10 @@ async function refineWithOpenAI(
       shipsFromNonEU: false,
     });
 
+    console.log(
+      `[refineWithOpenAI] matchQuality="${matchQuality}" | original="${original.title.slice(0, 40)}" | best="${best.source}"`,
+    );
+
     return {
       originalProduct: {
         name: gpt.productName?.trim() || cleanTitle(original.title),
@@ -690,6 +698,7 @@ async function refineWithOpenAI(
       category,
       confidence: Math.min(95, Math.max(50, Math.round(gpt.confidence ?? 70))),
       priceRange: { min: Math.min(...prices), max: Math.max(...prices) },
+      matchQuality,
       alternatives: {
         best: toAlt(best, "best"),
         cheapest: toAlt(cheapest, "cheapest"),
@@ -703,7 +712,7 @@ async function refineWithOpenAI(
 }
 
 // ---------------------------------------------------------------------------
-// Heuristic builder — sorts by price, no AI
+// Heuristic builder — no AI, matchQuality defaults to "uncertain"
 // ---------------------------------------------------------------------------
 
 function buildResultFromPriced(priced: PricedMatch[]): AnalysisResult | null {
@@ -734,22 +743,20 @@ function buildResultFromPriced(priced: PricedMatch[]): AnalysisResult | null {
     shipsFromNonEU: false,
   });
 
-  const brand = guessBrand(original.title);
-  const category = guessCategory(original.title);
-
   return {
     originalProduct: {
       name: cleanTitle(original.title),
-      brand,
+      brand: guessBrand(original.title),
       store: original.source ?? "Unbekannter Shop",
       price: original.price.extracted_value,
       imageUrl: bestImg(original),
       link: original.link,
     },
-    brand,
-    category,
+    brand: guessBrand(original.title),
+    category: guessCategory(original.title),
     confidence: Math.min(95, 50 + priced.length * 5),
     priceRange: { min: Math.min(...prices), max: Math.max(...prices) },
+    matchQuality: "uncertain",
     alternatives: {
       best: toAlt(best, "best"),
       cheapest: toAlt(cheapest, "cheapest"),

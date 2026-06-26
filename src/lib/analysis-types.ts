@@ -1,5 +1,7 @@
 import type { AlternativeRole } from "./catalog";
 
+export type MatchQuality = "exact" | "similar" | "uncertain";
+
 export type ProductSummary = {
   name: string;
   brand: string;
@@ -36,6 +38,7 @@ export type AnalysisResult = {
   category: string;
   confidence: number;
   priceRange: PriceRange;
+  matchQuality: MatchQuality;
   alternatives: {
     best: AlternativeProduct;
     cheapest: AlternativeProduct;

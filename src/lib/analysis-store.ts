@@ -1,6 +1,6 @@
 import type { ProductIcon } from "@/components/ui/ProductThumb";
 import type { AlternativeRole } from "./catalog";
-import type { AnalysisResult } from "./analysis-types";
+import type { AnalysisResult, MatchQuality } from "./analysis-types";
 
 export type StoredAlternative = {
   role: AlternativeRole;
@@ -23,6 +23,7 @@ export type StoredAnalysis = {
   icon: ProductIcon;
   tone: number;
   imageUrl?: string;
+  matchQuality?: MatchQuality; // optional — old localStorage entries may not have this
   original: { store: string; price: number; link?: string };
   alternatives: StoredAlternative[];
 };
@@ -64,6 +65,7 @@ export function saveAnalysisResult(result: AnalysisResult): StoredAnalysis {
     icon: guessIcon(result.category, result.originalProduct.name),
     tone: Math.floor(Math.random() * 5),
     imageUrl: result.originalProduct.imageUrl,
+    matchQuality: result.matchQuality,
     original: {
       store: result.originalProduct.store,
       price: result.originalProduct.price,
