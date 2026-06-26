@@ -14,12 +14,31 @@ function getOpenAIKey(): string | undefined {
 }
 
 // ---------------------------------------------------------------------------
-// EU eligibility — strict gate, no fallback to non-EUR
+// Currency normalization
+// SerpAPI Lens uses "€"/"$"/"£", Shopping uses "EUR"/"USD"/"GBP".
+// Also handles missing currency field (common in Lens visual_matches).
+// ---------------------------------------------------------------------------
+
+function normalizeCurrency(raw: string | undefined | null): string {
+  if (!raw) return "";
+  const up = raw.trim().toUpperCase();
+  if (raw.trim() === "€" || up === "EUR") return "€";
+  if (raw.trim() === "$" || up === "USD") return "$";
+  if (raw.trim() === "£" || up === "GBP") return "£";
+  return raw.trim();
+}
+
+// ---------------------------------------------------------------------------
+// EU eligibility — strict but correct
+//
+// Accept:  explicit € / EUR currency
+//          OR no currency field but link/source is clearly EU
+// Reject:  explicit non-EUR currency ($, £, etc.)
+//          OR source is in the hard-exclusion list
 // ---------------------------------------------------------------------------
 
 const EU_TLD = /\.(de|at|ch|nl|fr|it|es|be|dk|se|fi|pl|pt|ie|eu)\b/;
 
-// Shops known to ship to DE/EU with EUR prices, even on .com domains.
 const KNOWN_EU_SHOP_SOURCES = [
   "zalando", "about you", "aboutyou",
   "breuninger", "peek & cloppenburg", "peek cloppenburg",
@@ -35,7 +54,6 @@ const KNOWN_EU_SHOP_SOURCES = [
   "c&a", "moncler", "stone island", "cp company", "parajumpers",
 ];
 
-// Hard-blocked — never shown, regardless of currency or TLD.
 const EXCLUDED_SHOP_SOURCES = [
   "walmart", "target", "macy", "nordstrom",
   "kohls", "kohl's", "jcpenney", "sears", "belk", "dillards",
@@ -46,28 +64,6 @@ const EXCLUDED_SHOP_SOURCES = [
   "ebay.com", "amazon.com",
 ];
 
-function isEUEligible(m: PricedMatch): boolean {
-  // Accept "€" (Lens) and "EUR" (Shopping) — all other currencies rejected.
-  const c = m.price.currency;
-  if (c !== "€" && c !== "EUR") return false;
-
-  const src = (m.source ?? "").toLowerCase();
-  const href = (m.link ?? "").toLowerCase();
-
-  if (EXCLUDED_SHOP_SOURCES.some((s) =>
-    src.includes(s) || href.includes(s.replace(/ /g, ""))
-  )) {
-    return false;
-  }
-
-  return true;
-}
-
-// ---------------------------------------------------------------------------
-// Shop priority scoring — 7 tiers + image bonus
-// Farfetch/Mytheresa/SSENSE are tier 6 — they cannot dominate as "original"
-// ---------------------------------------------------------------------------
-
 const OFFICIAL_BRAND_DOMAINS = [
   "nike", "adidas", "puma", "reebok", "newbalance", "new-balance",
   "converse", "vans", "tommy", "calvinklein", "ralphlauren", "lacoste",
@@ -77,6 +73,54 @@ const OFFICIAL_BRAND_DOMAINS = [
   "levi", "gap", "cos", "arket", "filippa",
   "cpcompany", "stoneisland", "moncler", "parajumpers", "arcteryx",
 ];
+
+function isEUEligible(m: PricedMatch): boolean {
+  const currency = normalizeCurrency(m.price.currency);
+  const src = (m.source ?? "").toLowerCase();
+  const href = (m.link ?? "").toLowerCase();
+
+  // Explicit non-EUR currency → always reject.
+  if (currency !== "" && currency !== "€") return false;
+
+  // Hard-exclude known non-EU shops regardless of currency.
+  if (EXCLUDED_SHOP_SOURCES.some((s) =>
+    src.includes(s) || href.includes(s.replace(/ /g, ""))
+  )) {
+    return false;
+  }
+
+  // Explicit EUR → accept.
+  if (currency === "€") return true;
+
+  // No currency field: accept only when source is clearly EU.
+  if (EU_TLD.test(href)) return true;
+  if (KNOWN_EU_SHOP_SOURCES.some((s) => src.includes(s))) return true;
+  if (OFFICIAL_BRAND_DOMAINS.some((d) =>
+    href.includes(d) && (/\.de\b/.test(href) || /\.com\/(de|eu|at|ch)/.test(href))
+  )) return true;
+
+  // Unknown source with no currency → reject (too risky).
+  return false;
+}
+
+// Why was a match rejected? Returns a short reason string for debug logs.
+function euRejectReason(m: PricedMatch): string {
+  const currency = normalizeCurrency(m.price.currency);
+  const src = (m.source ?? "").toLowerCase();
+  const href = (m.link ?? "").toLowerCase();
+  if (currency !== "" && currency !== "€") return `currency="${currency}"`;
+  if (EXCLUDED_SHOP_SOURCES.some((s) =>
+    src.includes(s) || href.includes(s.replace(/ /g, ""))
+  )) return "excluded_shop";
+  if (currency === "€") return "passes";
+  if (EU_TLD.test(href)) return "passes(eu_tld)";
+  if (KNOWN_EU_SHOP_SOURCES.some((s) => src.includes(s))) return "passes(known_eu)";
+  return "unknown_no_currency";
+}
+
+// ---------------------------------------------------------------------------
+// Shop priority scoring — 7 tiers + image bonus
+// ---------------------------------------------------------------------------
 
 const GERMAN_SHOPS = [
   "zalando", "about you", "aboutyou", "breuninger",
@@ -100,40 +144,26 @@ function shopScore(m: PricedMatch): number {
   const hasImage = Boolean(m.image ?? m.thumbnail);
 
   let score = 0;
-
   const isBrand = OFFICIAL_BRAND_DOMAINS.some((d) => href.includes(d));
   if (isBrand) {
-    // Tier 1 (90/50): official brand, DE/EU path vs generic .com
     score = /\.de\b/.test(href) || /\.com\/(de|eu|at|ch)/.test(href) ? 90 : 50;
   } else if (GERMAN_SHOPS.some((s) => src.includes(s))) {
-    // Tier 2 (80): established German shops
     score = 80;
   } else if (/\.de\b/.test(href)) {
-    // Tier 3 (60): any .de domain
     score = 60;
   } else if (/\.(at|ch)\b/.test(href)) {
-    // Tier 4 (50): DACH
     score = 50;
   } else if (EU_TLD.test(href)) {
-    // Tier 5 (40): other EU TLD
     score = 40;
   } else if (PREMIUM_EU_INTL.some((s) => src.includes(s))) {
-    // Tier 6 (30): premium shops with EU shipping
     score = 30;
   } else {
-    // Tier 7 (10): unknown EUR shop (gl=de already narrows results)
     score = 10;
   }
 
-  // Bonus: product image increases trust and display quality
   if (hasImage) score += 20;
-
   return score;
 }
-
-// ---------------------------------------------------------------------------
-// Public configuration check
-// ---------------------------------------------------------------------------
 
 export function isProductSearchConfigured(): boolean {
   return Boolean(process.env.SERPAPI_KEY);
@@ -168,6 +198,7 @@ type ShoppingApiResult = {
   thumbnail?: string;
   extracted_price?: number;
   currency?: string;
+  price?: string; // fallback string e.g. "59,95 €"
 };
 
 type ProductAnalysis = {
@@ -197,7 +228,7 @@ async function textSearch(query: string, apiKey: string): Promise<PricedMatch[]>
     url.searchParams.set("q", query);
     url.searchParams.set("gl", "de");
     url.searchParams.set("hl", "de");
-    url.searchParams.set("location", "Germany");
+    // NOTE: omit "location" — it can conflict with gl=de for shopping results
     url.searchParams.set("api_key", apiKey);
 
     const response = await fetch(url.toString());
@@ -209,18 +240,42 @@ async function textSearch(query: string, apiKey: string): Promise<PricedMatch[]>
     const data = (await response.json()) as {
       shopping_results?: ShoppingApiResult[];
     };
+    const raw = data.shopping_results ?? [];
 
-    return (data.shopping_results ?? [])
+    console.log(`[textSearch] "${query}" → ${raw.length} raw results`);
+    raw.slice(0, 6).forEach((r, i) => {
+      console.log(
+        `  [${i}] "${(r.title ?? "").slice(0, 45)}" | src="${r.source}" | cur="${r.currency}" | price="${r.price}" | extracted=${r.extracted_price} | link=${(r.link ?? "").slice(0, 60)}`,
+      );
+    });
+
+    return raw
       .map((r): PricedMatch | null => {
-        if (!r.title || typeof r.extracted_price !== "number") return null;
-        // Normalize "EUR" → "€" so isEUEligible works uniformly
-        const currency = r.currency === "EUR" || r.currency === "€" ? "€" : r.currency;
+        let extractedPrice = r.extracted_price;
+
+        // Fallback: parse from price string (e.g. "59,95 €" or "€59.95")
+        if (typeof extractedPrice !== "number" && r.price) {
+          const digits = r.price.replace(/[^\d,\.]/g, "").replace(",", ".");
+          const parsed = parseFloat(digits);
+          if (!isNaN(parsed) && parsed > 0) extractedPrice = parsed;
+        }
+
+        if (!r.title || typeof extractedPrice !== "number") return null;
+
+        // Normalize currency to "€" / "$" / "£"
+        const currency = normalizeCurrency(r.currency) || (
+          r.price?.includes("€") ? "€" :
+          r.price?.includes("$") ? "$" :
+          r.price?.includes("£") ? "£" :
+          undefined
+        );
+
         return {
           title: r.title,
           source: r.source,
           link: r.link,
           thumbnail: r.thumbnail,
-          price: { extracted_value: r.extracted_price, currency },
+          price: { extracted_value: extractedPrice, currency },
         };
       })
       .filter((m): m is PricedMatch => m !== null);
@@ -264,8 +319,8 @@ async function generateSearchQueries(imageUrl: string): Promise<ProductAnalysis 
                   "- productType: concise (color + material + product type + gender if visible)",
                   "- searchQueries: exactly 5 queries to find this or similar products on EU shops (Zalando, adidas.de, nike.de, Farfetch, Mytheresa…)",
                   "- Mix: 2 specific brand guesses, 2 generic descriptive queries, 1 German query (Deutsch)",
-                  "- Optimize for findability: include key visual attributes (color, material, style, cut)",
-                  "- If no product is recognizable at all: {\"productType\":\"\",\"searchQueries\":[]}",
+                  "- Optimize for findability on German/EU e-commerce sites",
+                  "- If no product recognizable: {\"productType\":\"\",\"searchQueries\":[]}",
                 ].join("\n"),
               },
             ],
@@ -311,11 +366,7 @@ function deduplicate(matches: PricedMatch[]): PricedMatch[] {
 }
 
 // ---------------------------------------------------------------------------
-// Main export: 3-stage pipeline
-//
-// Stage 1: Google Lens image search
-// Stage 2: Shopping search on Lens result titles (fast non-AI fallback)
-// Stage 3: GPT Vision → better queries → Shopping (handles unknown brands)
+// Main export: 3-stage pipeline with full diagnostic logging
 // ---------------------------------------------------------------------------
 
 export async function searchWithGoogleLens(
@@ -339,18 +390,12 @@ export async function searchWithGoogleLens(
     );
     blobUrl = blob.url;
 
-    // 10-minute validity covers the full multi-stage pipeline.
     const validUntil = Date.now() + 10 * 60 * 1000;
     const signedToken = await issueSignedToken({
-      pathname: blob.pathname,
-      operations: ["get"],
-      validUntil,
+      pathname: blob.pathname, operations: ["get"], validUntil,
     });
     const { presignedUrl: imageUrl } = await presignUrl(signedToken, {
-      operation: "get",
-      pathname: blob.pathname,
-      access: "private",
-      validUntil,
+      operation: "get", pathname: blob.pathname, access: "private", validUntil,
     });
 
     // -----------------------------------------------------------------------
@@ -378,9 +423,16 @@ export async function searchWithGoogleLens(
     );
     const lensEU = lensPriced.filter(isEUEligible);
 
+    // Diagnostic: log every priced Lens result
     console.log(
-      `[Stage 1] Lens: ${lensMatches.length} total, ${lensPriced.length} priced, ${lensEU.length} EU.`,
+      `[Stage 1] Lens: ${lensMatches.length} total, ${lensPriced.length} priced, ${lensEU.length} EU-eligible`,
     );
+    lensPriced.forEach((m, i) => {
+      const reason = euRejectReason(m);
+      console.log(
+        `  [${i}] "${m.title.slice(0, 45)}" | src="${m.source}" | cur="${m.price.currency}" | val=${m.price.extracted_value} | ${reason} | link=${(m.link ?? "").slice(0, 70)}`,
+      );
+    });
 
     if (lensEU.length >= MIN_EU_MATCHES) {
       const sorted = [...lensEU].sort((a, b) => shopScore(b) - shopScore(a));
@@ -389,32 +441,41 @@ export async function searchWithGoogleLens(
     }
 
     // -----------------------------------------------------------------------
-    // Stage 2: Shopping search using Lens result titles (no AI needed)
-    // Fast path for products Lens found in non-EU shops — find EU equivalents.
+    // Stage 2: Shopping on Lens titles (fast non-AI fallback)
     // -----------------------------------------------------------------------
     let hadAnyPricedResults = lensPriced.length > 0;
 
     if (lensPriced.length > 0) {
-      // Use the best-scored Lens titles (EU and non-EU) as text queries.
       const lensQueries = [...lensPriced]
         .sort((a, b) => shopScore(b) - shopScore(a))
         .slice(0, 3)
         .map((m) => m.title.trim())
         .filter(Boolean);
 
-      console.log(`[Stage 2] Shopping queries from Lens titles:`, lensQueries);
+      console.log(`[Stage 2] Shopping queries:`, lensQueries);
 
       const stage2Results = await Promise.all(
         lensQueries.map((q) => textSearch(q, apiKey)),
       );
-      const stage2EU = stage2Results.flat().filter(isEUEligible);
+      const stage2All = stage2Results.flat();
+      const stage2EU = stage2All.filter(isEUEligible);
 
       console.log(
-        `[Stage 2] Shopping: ${stage2Results.flat().length} total, ${stage2EU.length} EU.`,
+        `[Stage 2] ${stage2All.length} Shopping results, ${stage2EU.length} EU-eligible`,
       );
+      stage2All.forEach((m, i) => {
+        const reason = euRejectReason(m);
+        if (reason !== "passes" && reason !== "passes(eu_tld)" && reason !== "passes(known_eu)") {
+          console.log(
+            `  [${i}] REJECTED: "${m.title.slice(0, 40)}" | src="${m.source}" | cur="${m.price.currency}" | reason=${reason}`,
+          );
+        }
+      });
 
       const merged2 = deduplicate([...lensEU, ...stage2EU]);
       const sorted2 = merged2.sort((a, b) => shopScore(b) - shopScore(a));
+
+      console.log(`[Stage 2] Merged EU: ${sorted2.length}`);
 
       if (sorted2.length >= MIN_EU_MATCHES) {
         const result = await finalizeResult(imageUrl, sorted2);
@@ -423,22 +484,22 @@ export async function searchWithGoogleLens(
     }
 
     // -----------------------------------------------------------------------
-    // Stage 3: GPT Vision → semantic queries → Shopping
-    // Used for unbranded / difficult products where Lens found nothing useful.
+    // Stage 3: GPT Vision → better queries → Shopping
     // -----------------------------------------------------------------------
     if (!getOpenAIKey()) {
+      console.log(`[Stage 3] Kein OpenAI-Key → kein GPT-Fallback.`);
       return hadAnyPricedResults ? "no_eu_shop" : null;
     }
 
     const productAnalysis = await generateSearchQueries(imageUrl);
 
     if (!productAnalysis) {
-      // GPT couldn't recognize a product → truly no match
+      console.log(`[Stage 3] GPT konnte kein Produkt erkennen.`);
       return hadAnyPricedResults ? "no_eu_shop" : null;
     }
 
     console.log(
-      `[Stage 3] GPT recognized: "${productAnalysis.productType}". Queries:`,
+      `[Stage 3] GPT: "${productAnalysis.productType}" | Queries:`,
       productAnalysis.searchQueries,
     );
 
@@ -447,19 +508,21 @@ export async function searchWithGoogleLens(
     );
     const stage3All = stage3Results.flat();
     const stage3EU = stage3All.filter(isEUEligible);
+    hadAnyPricedResults = hadAnyPricedResults || stage3All.length > 0;
 
     console.log(
-      `[Stage 3] Shopping: ${stage3All.length} total, ${stage3EU.length} EU.`,
+      `[Stage 3] ${stage3All.length} Shopping results, ${stage3EU.length} EU-eligible`,
     );
-
-    hadAnyPricedResults = hadAnyPricedResults || stage3All.length > 0;
 
     const merged3 = deduplicate([...lensEU, ...stage3EU]);
     const sorted3 = merged3.sort((a, b) => shopScore(b) - shopScore(a));
 
-    console.log(`[Stage 3] Merged EU: ${sorted3.length} after dedup.`);
+    console.log(`[Stage 3] Merged EU: ${sorted3.length}`);
 
     if (sorted3.length < MIN_EU_MATCHES) {
+      console.log(
+        `[searchWithGoogleLens] Alle 3 Stages erschöpft: nur ${sorted3.length} EU-Treffer. → ${hadAnyPricedResults ? "no_eu_shop" : "null"}`,
+      );
       return hadAnyPricedResults ? "no_eu_shop" : null;
     }
 
@@ -475,7 +538,7 @@ export async function searchWithGoogleLens(
 }
 
 // ---------------------------------------------------------------------------
-// Finalize: GPT refinement with timeout → heuristic fallback
+// Finalize: GPT refinement (9s timeout) → heuristic fallback
 // ---------------------------------------------------------------------------
 
 async function finalizeResult(
@@ -498,7 +561,7 @@ async function finalizeResult(
   if (timeoutId !== null) clearTimeout(timeoutId);
 
   if (gptResult === null) {
-    console.warn(`[finalizeResult] GPT-Timeout nach ${GPT_TIMEOUT_MS}ms – Heuristik.`);
+    console.warn(`[finalizeResult] GPT-Timeout → Heuristik.`);
     return buildResultFromPriced(sorted);
   }
 
@@ -506,7 +569,7 @@ async function finalizeResult(
 }
 
 // ---------------------------------------------------------------------------
-// GPT refinement: picks original / best / cheapest / premium from candidates
+// GPT refinement: picks original / best / cheapest / premium
 // ---------------------------------------------------------------------------
 
 async function refineWithOpenAI(
@@ -521,7 +584,7 @@ async function refineWithOpenAI(
     title: m.title,
     store: m.source ?? "Unknown",
     price: m.price.extracted_value,
-    currency: m.price.currency ?? "€",
+    currency: normalizeCurrency(m.price.currency) || "€",
   }));
 
   try {
@@ -543,15 +606,15 @@ async function refineWithOpenAI(
               {
                 type: "text",
                 text: [
-                  "You select the best entries from EU shop candidates for a German price-comparison app.",
-                  `Candidates (pre-sorted by EU quality, all EUR, all ship to Germany): ${JSON.stringify(matchList)}`,
+                  "Select entries from EU shop candidates for a German price-comparison app.",
+                  `Candidates (pre-sorted by EU quality, all ship to Germany): ${JSON.stringify(matchList)}`,
                   "",
                   'Return JSON: {"originalIndex":0,"bestIndex":1,"cheapestIndex":2,"premiumIndex":3,"productName":"Nike Air Max 97","brand":"Nike","category":"Schuhe","confidence":82}',
                   "",
                   "Rules:",
                   "- originalIndex: closest visual match to the photo",
-                  "- bestIndex: best value from a German or brand shop (prefer Zalando, About You, Breuninger, adidas.de, nike.de)",
-                  "- cheapestIndex: lowest EUR price (must differ from original and best)",
+                  "- bestIndex: best value from a German/brand shop (prefer Zalando, About You, Breuninger, adidas.de)",
+                  "- cheapestIndex: lowest price (must differ from original and best)",
                   "- premiumIndex: premium option — Farfetch, Mytheresa, SSENSE, Mr Porter preferred (must differ from all others)",
                   "- All four indices MUST be different",
                   "- productName: clean brand + product name only",
@@ -597,7 +660,6 @@ async function refineWithOpenAI(
       priced.find((m) => m.image ?? m.thumbnail)?.image ??
       priced.find((m) => m.thumbnail)?.thumbnail;
     const bestImg = (m: PricedMatch) => m.image ?? m.thumbnail ?? anyThumb;
-
     const brand = gpt.brand?.trim() || guessBrand(original.title);
     const category = gpt.category?.trim() || guessCategory(original.title);
 
@@ -641,13 +703,13 @@ async function refineWithOpenAI(
 }
 
 // ---------------------------------------------------------------------------
-// Heuristic builder — no AI, picks best/cheapest/premium by price
+// Heuristic builder — sorts by price, no AI
 // ---------------------------------------------------------------------------
 
 function buildResultFromPriced(priced: PricedMatch[]): AnalysisResult | null {
   if (priced.length < MIN_EU_MATCHES) return null;
 
-  const [original, ...rest] = priced; // priced is already sorted by shopScore
+  const [original, ...rest] = priced;
   const byPrice = [...rest].sort((a, b) => a.price.extracted_value - b.price.extracted_value);
   const cheapest = byPrice[0];
   const premium = byPrice[byPrice.length - 1];
@@ -711,9 +773,7 @@ export { buildResultFromMatches };
 // Helpers
 // ---------------------------------------------------------------------------
 
-function cleanTitle(title: string): string {
-  return title.trim();
-}
+function cleanTitle(t: string): string { return t.trim(); }
 
 const KNOWN_BRANDS = [
   "Adidas Originals", "Adidas", "Nike", "Puma", "Reebok",
