@@ -94,7 +94,7 @@ export default function VerlaufPage() {
                       i !== items.length - 1 ? "hairline-b" : ""
                     }`}
                   >
-                    <ProductThumb icon={item.icon} tone={item.tone} size="sm" />
+                    <ProductThumb icon={item.icon} tone={item.tone} size="sm" src={item.imageUrl} />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-[15px] font-semibold">
                         {item.name}

@@ -8,6 +8,7 @@ export type StoredAlternative = {
   store: string;
   price: number;
   savingsPercent: number;
+  imageUrl?: string;
 };
 
 export type StoredAnalysis = {
@@ -19,6 +20,7 @@ export type StoredAnalysis = {
   confidence: number;
   icon: ProductIcon;
   tone: number;
+  imageUrl?: string;
   original: { store: string; price: number };
   alternatives: StoredAlternative[];
 };
@@ -59,6 +61,7 @@ export function saveAnalysisResult(result: AnalysisResult): StoredAnalysis {
     confidence: result.confidence,
     icon: guessIcon(result.category, result.originalProduct.name),
     tone: Math.floor(Math.random() * 5),
+    imageUrl: result.originalProduct.imageUrl,
     original: {
       store: result.originalProduct.store,
       price: result.originalProduct.price,

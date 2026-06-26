@@ -59,7 +59,7 @@ export default function AnalyseClient({ id }: { id: string }) {
 
       <div className="flex-1 px-5 pb-32 pt-5">
         <div className="relative">
-          <ProductThumb icon={analysis.icon} tone={analysis.tone} size="xl" />
+          <ProductThumb icon={analysis.icon} tone={analysis.tone} size="xl" src={analysis.imageUrl} />
           <div className="absolute right-3 top-3">
             <Badge tone="match">
               <Sparkle size={11} strokeWidth={2} />
@@ -84,7 +84,7 @@ export default function AnalyseClient({ id }: { id: string }) {
           Original
         </h3>
         <Card className="mt-2.5 flex items-center gap-4 p-4">
-          <ProductThumb icon={analysis.icon} tone={analysis.tone} size="md" />
+          <ProductThumb icon={analysis.icon} tone={analysis.tone} size="md" src={analysis.imageUrl} />
           <div className="min-w-0 flex-1">
             <p className="truncate text-[15px] font-semibold">{original.store}</p>
             <p className="text-[16px] font-bold tracking-tight">
@@ -124,7 +124,7 @@ export default function AnalyseClient({ id }: { id: string }) {
                   {meta.label}
                 </div>
                 <div className="flex items-center gap-4">
-                  <ProductThumb icon={analysis.icon} tone={alt.role === "best" ? analysis.tone : (analysis.tone + 2)} size="md" />
+                  <ProductThumb icon={analysis.icon} tone={alt.role === "best" ? analysis.tone : (analysis.tone + 2)} size="md" src={alt.imageUrl} />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-[14px] font-semibold">{alt.name}</p>
                     <p className="truncate text-[13px] text-foreground-secondary">

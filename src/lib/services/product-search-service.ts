@@ -15,12 +15,14 @@ export function isProductSearchConfigured(): boolean {
 type LensVisualMatch = {
   title?: string;
   source?: string;
+  thumbnail?: string;
   price?: { extracted_value?: number };
 };
 
 type PricedMatch = {
   title: string;
   source?: string;
+  thumbnail?: string;
   price: { extracted_value: number };
 };
 
@@ -236,6 +238,7 @@ async function refineWithOpenAI(
     const cheapest = priced[gpt.cheapestIndex];
     const premium = priced[gpt.premiumIndex];
     const prices = priced.map((m) => m.price.extracted_value);
+    const anyThumb = priced.find((m) => m.thumbnail)?.thumbnail;
 
     const brand = gpt.brand?.trim() || guessBrand(original.title);
     const category = gpt.category?.trim() || guessCategory(original.title);
@@ -256,6 +259,7 @@ async function refineWithOpenAI(
             100,
         ),
       ),
+      imageUrl: match.thumbnail ?? anyThumb,
     });
 
     return {
@@ -264,6 +268,7 @@ async function refineWithOpenAI(
         brand,
         store: original.source ?? "Unbekannter Shop",
         price: original.price.extracted_value,
+        imageUrl: original.thumbnail ?? anyThumb,
       },
       brand,
       category,
@@ -295,6 +300,7 @@ function buildResultFromPriced(priced: PricedMatch[]): AnalysisResult | null {
   const premium = sortedByPrice[sortedByPrice.length - 1];
   const best = sortedByPrice[Math.floor(sortedByPrice.length / 2)];
   const prices = priced.map((m) => m.price.extracted_value);
+  const anyThumb = priced.find((m) => m.thumbnail)?.thumbnail;
 
   const toAlternative = (
     match: PricedMatch,
@@ -311,6 +317,7 @@ function buildResultFromPriced(priced: PricedMatch[]): AnalysisResult | null {
           100,
       ),
     ),
+    imageUrl: match.thumbnail ?? anyThumb,
   });
 
   const brand = guessBrand(original.title);
@@ -322,6 +329,7 @@ function buildResultFromPriced(priced: PricedMatch[]): AnalysisResult | null {
       brand,
       store: original.source ?? "Unbekannter Shop",
       price: original.price.extracted_value,
+      imageUrl: original.thumbnail ?? anyThumb,
     },
     brand,
     category,

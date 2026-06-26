@@ -1,3 +1,6 @@
+"use client";
+
+import { useState } from "react";
 import { ShoppingBag, Sparkles, Tag, Watch, Footprints, Shirt } from "lucide-react";
 
 const icons = {
@@ -28,15 +31,40 @@ export default function ProductThumb({
   tone = 0,
   size = "md",
   className = "",
+  src,
 }: {
   icon?: ProductIcon;
   tone?: number;
   size?: keyof typeof sizeClasses;
   className?: string;
+  src?: string;
 }) {
+  const [imgError, setImgError] = useState(false);
+  const showImage = Boolean(src) && !imgError;
   const Icon = icons[icon];
   const swatch = swatches[tone % swatches.length];
   const isLarge = size === "lg" || size === "xl";
+
+  if (showImage) {
+    return (
+      <div
+        className={`relative shrink-0 overflow-hidden bg-background ring-1 ring-inset ring-foreground/[0.06] ${sizeClasses[size]} ${className}`}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element -- SerpAPI thumbnails come from many external CDN domains; whitelisting all is impractical */}
+        <img
+          src={src}
+          alt=""
+          className="h-full w-full object-contain"
+          onError={() => setImgError(true)}
+        />
+        {isLarge && (
+          <div className={`${chipPosition} flex h-9 w-9 items-center justify-center rounded-full bg-background/55 backdrop-blur-sm`}>
+            <Icon className="text-foreground/55" strokeWidth={1.5} size={17} />
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div
