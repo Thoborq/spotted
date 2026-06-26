@@ -11,6 +11,97 @@ const MAX_GPT_MATCHES = 12;
 // Fällt GPT nicht innerhalb dieses Zeitraums zurück, greift die Heuristik.
 const GPT_TIMEOUT_MS = 9000;
 
+// ---------------------------------------------------------------------------
+// Shop-Qualität: Bevorzuge seriöse EU-Shops mit Versand nach Deutschland.
+// ---------------------------------------------------------------------------
+
+const PREFERRED_EU_SHOPS = [
+  "zalando", "about you", "aboutyou", "breuninger",
+  "peek & cloppenburg", "peek cloppenburg", "p&c",
+  "farfetch", "end.", "end clothing", "ssense",
+  "mytheresa", "luisaviaroma", "luisa via roma",
+  "mr porter", "mrporter", "net-a-porter", "netaporter", "yoox",
+  "snipes", "solebox", "overkill", "footpatrol",
+  "asos", "zooplus", "planet sports",
+];
+
+const OFFICIAL_BRAND_DOMAINS = [
+  "nike.com", "adidas.com", "puma.com", "reebok.com",
+  "newbalance.com", "converse.com", "vans.com",
+  "tommy.com", "calvinklein.com", "ralphlauren.com",
+  "lacoste.com", "hugoboss.com", "zara.com",
+  "uniqlo.com", "mango.com", "gucci.com", "prada.com",
+  "louisvuitton.com", "dior.com", "balenciaga.com",
+  "versace.com", "burberry.com", "thenorthface.com",
+  "patagonia.com", "apple.com", "samsung.com",
+  "levi.com", "levis.com", "gap.com",
+];
+
+const AVOID_SHOPS = [
+  "walmart", "target.com", "macy", "nordstrom rack", "nordstromrack",
+  "kohls", "kohl's", "jcpenney", "sears", "belk", "dillards",
+  "tj maxx", "tjmaxx", "ross stores", "Burlington coat",
+];
+
+const EU_TLDS = /\.(de|at|ch|fr|nl|es|it|be|dk|se|no|fi|pl|pt|ie|cz|sk|hu|ro|bg|hr|si|lt|lv|ee|mt|cy|lu|gr)\b/;
+
+function shopScore(m: PricedMatch): number {
+  const src = (m.source ?? "").toLowerCase();
+  const href = (m.link ?? "").toLowerCase();
+  const currency = m.price.currency;
+
+  let score = 0;
+
+  // Currency: EUR is the strongest EU signal
+  if (currency === "€") score += 25;
+  else if (currency === "£") score -= 8;
+  else if (currency === "$" || currency === "USD") score -= 20;
+
+  // Preferred EU fashion/lifestyle shops
+  if (PREFERRED_EU_SHOPS.some((s) => src.includes(s))) score += 30;
+
+  // Official brand domains (reliable, ship to EU)
+  if (OFFICIAL_BRAND_DOMAINS.some((d) => href.includes(d))) score += 15;
+
+  // EU country-code TLD in product link
+  if (EU_TLDS.test(href)) score += 12;
+
+  // Known US-only shops to avoid
+  if (AVOID_SHOPS.some((s) => src.includes(s) || href.includes(s.replace(/ /g, "")))) {
+    score -= 35;
+  }
+
+  // US locale markers in URL
+  if (/\/en-us\/|\/us\/|\/en_us\//.test(href)) score -= 12;
+
+  return score;
+}
+
+function isNonEUShop(m: PricedMatch): boolean {
+  const src = (m.source ?? "").toLowerCase();
+  const href = (m.link ?? "").toLowerCase();
+  const currency = m.price.currency;
+
+  // EUR price is a strong EU signal
+  if (currency === "€") return false;
+
+  // Known preferred EU shops
+  if (PREFERRED_EU_SHOPS.some((s) => src.includes(s))) return false;
+
+  // EU country-code TLD
+  if (EU_TLDS.test(href)) return false;
+
+  // Official brand EU domain
+  if (OFFICIAL_BRAND_DOMAINS.some((d) => href.includes(d + "/de") || href.includes(d + "/eu"))) return false;
+
+  // Clear non-EU signals
+  if (AVOID_SHOPS.some((s) => src.includes(s))) return true;
+  if (currency === "$" || currency === "USD") return true;
+  if (currency === "£" && !href.includes(".eu")) return true;
+
+  return false;
+}
+
 /** true, sobald SERPAPI_KEY gesetzt ist. */
 export function isProductSearchConfigured(): boolean {
   return Boolean(process.env.SERPAPI_KEY);
@@ -22,7 +113,7 @@ type LensVisualMatch = {
   link?: string;
   thumbnail?: string;
   image?: string;
-  price?: { extracted_value?: number };
+  price?: { extracted_value?: number; currency?: string };
 };
 
 type PricedMatch = {
@@ -31,7 +122,7 @@ type PricedMatch = {
   link?: string;
   thumbnail?: string;
   image?: string;
-  price: { extracted_value: number };
+  price: { extracted_value: number; currency?: string };
 };
 
 type GPTRefinement = {
@@ -48,13 +139,9 @@ type GPTRefinement = {
 /**
  * Echte Bildsuche über SerpAPI Google Lens, optional verfeinert durch GPT.
  *
- * Das Foto wird kurz über Vercel Blob öffentlich gehostet (SerpAPI benötigt
- * eine öffentliche URL) und direkt danach wieder gelöscht.
- *
- * Wenn OPENAI_API_KEY gesetzt ist und mind. MIN_PRICED_MATCHES preisgelistete
- * Treffer vorliegen, wird GPT-4o-mini zur Auswertung hinzugezogen. Schlägt
- * der GPT-Aufruf fehl oder überschreitet GPT_TIMEOUT_MS, greift die Heuristik
- * als Fallback ein.
+ * Ergebnisse werden nach EU-Shop-Qualität sortiert und auf EUR-Preise
+ * gefiltert (wenn ausreichend vorhanden). Ziel: nur seriöse Shops mit
+ * Versand nach Deutschland.
  */
 export async function searchWithGoogleLens(
   image: UploadedImage,
@@ -78,9 +165,7 @@ export async function searchWithGoogleLens(
     );
     blobUrl = blob.url;
 
-    // The store is private-only so we need a presigned GET URL that SerpAPI
-    // (and GPT vision) can access without authentication headers.
-    const validUntil = Date.now() + 3 * 60 * 1000; // 3 minutes
+    const validUntil = Date.now() + 3 * 60 * 1000;
     const signedToken = await issueSignedToken({
       pathname: blob.pathname,
       operations: ["get"],
@@ -97,12 +182,13 @@ export async function searchWithGoogleLens(
     url.searchParams.set("engine", "google_lens");
     url.searchParams.set("url", imageUrl);
     url.searchParams.set("api_key", apiKey);
+    // Germany locale → SerpAPI returns EU results with EUR prices
+    url.searchParams.set("hl", "de");
+    url.searchParams.set("gl", "de");
 
     const response = await fetch(url.toString());
     if (!response.ok) {
-      console.error(
-        `SerpAPI Google Lens antwortete mit HTTP ${response.status}`,
-      );
+      console.error(`SerpAPI Google Lens antwortete mit HTTP ${response.status}`);
       return null;
     }
 
@@ -111,10 +197,20 @@ export async function searchWithGoogleLens(
     };
     const matches = data.visual_matches ?? [];
 
-    const priced = matches.filter(
+    const rawPriced = matches.filter(
       (m): m is PricedMatch =>
         typeof m.price?.extracted_value === "number" && Boolean(m.title),
     );
+
+    // Sort by EU/shop quality — best EU shops first
+    const sortedPriced = [...rawPriced].sort(
+      (a, b) => shopScore(b) - shopScore(a),
+    );
+
+    // Prefer EUR-only results; fall back to quality-sorted all only if too few EUR matches
+    const eurPriced = sortedPriced.filter((m) => m.price.currency === "€");
+    const priced =
+      eurPriced.length >= MIN_PRICED_MATCHES ? eurPriced : sortedPriced;
 
     const useGPT =
       Boolean(process.env.OPENAI_API_KEY) &&
@@ -141,9 +237,14 @@ export async function searchWithGoogleLens(
     const result = gptResult ?? buildResultFromPriced(priced);
 
     if (result) {
-      const suffix = gptResult ? ", GPT-verfeinert" : useGPT ? ", GPT-Timeout → Heuristik" : "";
+      const suffix = gptResult
+        ? ", GPT-verfeinert"
+        : useGPT
+          ? ", GPT-Timeout → Heuristik"
+          : "";
+      const eurCount = eurPriced.length;
       console.log(
-        `[searchWithGoogleLens] Live-Treffer: "${result.originalProduct.name}" (${matches.length} visual_matches${suffix}).`,
+        `[searchWithGoogleLens] Live-Treffer: "${result.originalProduct.name}" (${matches.length} matches, ${eurCount} EUR${suffix}).`,
       );
     } else {
       console.log(
@@ -173,6 +274,7 @@ async function refineWithOpenAI(
     title: m.title,
     store: m.source ?? "Unknown",
     price: m.price.extracted_value,
+    currency: m.price.currency ?? "?",
   }));
 
   try {
@@ -197,17 +299,19 @@ async function refineWithOpenAI(
               {
                 type: "text",
                 text: [
-                  "You analyze a product photo for a price comparison app.",
-                  `Google Lens results: ${JSON.stringify(matchList)}`,
+                  "You analyze a product photo for a German price comparison app.",
+                  `Google Lens results (pre-sorted by EU shop quality): ${JSON.stringify(matchList)}`,
                   "",
                   'Return JSON: {"originalIndex":0,"bestIndex":1,"cheapestIndex":2,"premiumIndex":3,"productName":"Nike Air Max 97","brand":"Nike","category":"Schuhe","confidence":82}',
                   "",
                   "Rules:",
                   "- originalIndex: best visual match for the product shown in the image",
-                  "- bestIndex: best value-for-money alternative (different from originalIndex)",
-                  "- cheapestIndex: lowest price (different from originalIndex and bestIndex)",
-                  "- premiumIndex: highest quality/price (different from all others)",
+                  "- bestIndex: best value-for-money from a reputable EU/German shop (prefer Zalando, About You, Farfetch, Breuninger, or official brand sites like adidas.com)",
+                  "- cheapestIndex: lowest EUR price from a trustworthy shop (different from original and best)",
+                  "- premiumIndex: premium option from a luxury/curated shop (Farfetch, Mytheresa, SSENSE, Mr Porter or similar — different from all others)",
                   "- All four indices must be different from each other",
+                  "- Strongly prefer EUR (€) prices over USD ($) or GBP (£)",
+                  "- Avoid Walmart, Target, Macy's, and unknown US-only marketplaces",
                   "- productName: clean name without store/size/color info",
                   "- category must be one of: Schuhe, Hoodie, Shirt, Jacke, Hose, Uhr, Tasche, Gürtel, Brille, Kleid, Produkt",
                   "- confidence: integer 50-95",
@@ -241,19 +345,13 @@ async function refineWithOpenAI(
       gpt.premiumIndex,
     ];
 
-    if (
-      indices.some(
-        (i) => typeof i !== "number" || i < 0 || i >= priced.length,
-      )
-    ) {
+    if (indices.some((i) => typeof i !== "number" || i < 0 || i >= priced.length)) {
       console.error("[refineWithOpenAI] GPT lieferte ungültige Indices:", gpt);
       return null;
     }
 
     if (new Set(indices).size < 4) {
-      console.warn(
-        "[refineWithOpenAI] GPT lieferte doppelte Indices, Heuristik-Fallback.",
-      );
+      console.warn("[refineWithOpenAI] GPT lieferte doppelte Indices, Heuristik-Fallback.");
       return null;
     }
 
@@ -262,11 +360,12 @@ async function refineWithOpenAI(
     const cheapest = priced[gpt.cheapestIndex];
     const premium = priced[gpt.premiumIndex];
     const prices = priced.map((m) => m.price.extracted_value);
-    const anyThumb = priced.find((m) => m.image ?? m.thumbnail)?.image ?? priced.find((m) => m.thumbnail)?.thumbnail;
+    const anyThumb =
+      priced.find((m) => m.image ?? m.thumbnail)?.image ??
+      priced.find((m) => m.thumbnail)?.thumbnail;
 
     const brand = gpt.brand?.trim() || guessBrand(original.title);
     const category = gpt.category?.trim() || guessCategory(original.title);
-
     const bestImageUrl = (m: PricedMatch) => m.image ?? m.thumbnail ?? anyThumb;
 
     const toAlternative = (
@@ -280,13 +379,12 @@ async function refineWithOpenAI(
       savingsPercent: Math.max(
         0,
         Math.round(
-          (1 -
-            match.price.extracted_value / original.price.extracted_value) *
-            100,
+          (1 - match.price.extracted_value / original.price.extracted_value) * 100,
         ),
       ),
       imageUrl: bestImageUrl(match),
       link: match.link,
+      shipsFromNonEU: isNonEUShop(match),
     });
 
     return {
@@ -317,8 +415,7 @@ async function refineWithOpenAI(
 function buildResultFromPriced(priced: PricedMatch[]): AnalysisResult | null {
   if (priced.length < MIN_PRICED_MATCHES) return null;
 
-  // Erster Treffer = höchste visuelle Ähnlichkeit laut Google Lens → "Original".
-  // Alternativen aus dem Rest, um Doppelungen zu vermeiden.
+  // priced is already sorted by shop quality; first entry is the best EU match.
   const [original, ...rest] = priced;
   const sortedByPrice = [...rest].sort(
     (a, b) => a.price.extracted_value - b.price.extracted_value,
@@ -328,7 +425,9 @@ function buildResultFromPriced(priced: PricedMatch[]): AnalysisResult | null {
   const premium = sortedByPrice[sortedByPrice.length - 1];
   const best = sortedByPrice[Math.floor(sortedByPrice.length / 2)];
   const prices = priced.map((m) => m.price.extracted_value);
-  const anyThumb = priced.find((m) => m.image ?? m.thumbnail)?.image ?? priced.find((m) => m.thumbnail)?.thumbnail;
+  const anyThumb =
+    priced.find((m) => m.image ?? m.thumbnail)?.image ??
+    priced.find((m) => m.thumbnail)?.thumbnail;
 
   const bestImageUrl = (m: PricedMatch) => m.image ?? m.thumbnail ?? anyThumb;
 
@@ -343,12 +442,12 @@ function buildResultFromPriced(priced: PricedMatch[]): AnalysisResult | null {
     savingsPercent: Math.max(
       0,
       Math.round(
-        (1 - match.price.extracted_value / original.price.extracted_value) *
-          100,
+        (1 - match.price.extracted_value / original.price.extracted_value) * 100,
       ),
     ),
     imageUrl: bestImageUrl(match),
     link: match.link,
+    shipsFromNonEU: isNonEUShop(match),
   });
 
   const brand = guessBrand(original.title);
@@ -386,15 +485,8 @@ function buildResultFromMatches(
   return buildResultFromPriced(priced);
 }
 
-// Wird von buildResultFromMatches indirekt aufgerufen — export verhindert
-// "unused" TS-Warnung falls die Funktion später aus route.ts genutzt wird.
 export { buildResultFromMatches };
 
-/**
- * Nur Whitespace-Trimming: gescrapte Google-Lens-Titel enthalten manchmal
- * Shop-Namen oder Größen, aber ein Trennzeichen-Schnitt riskiert, die Marke
- * mit abzuschneiden. Sauberes Umformulieren ist Aufgabe von GPT (Step 4).
- */
 function cleanTitle(title: string): string {
   return title.trim();
 }

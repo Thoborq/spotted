@@ -22,6 +22,7 @@ export type AlternativeProduct = {
   savingsPercent: number;
   imageUrl?: string;
   link?: string;
+  shipsFromNonEU?: boolean;
 };
 
 /**

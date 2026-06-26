@@ -10,6 +10,7 @@ export type StoredAlternative = {
   savingsPercent: number;
   imageUrl?: string;
   link?: string;
+  shipsFromNonEU?: boolean;
 };
 
 export type StoredAnalysis = {

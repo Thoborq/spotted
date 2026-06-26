@@ -132,6 +132,11 @@ export default function AnalyseClient({ id }: { id: string }) {
                     <p className="truncate text-[13px] text-foreground-secondary">
                       {alt.store}
                     </p>
+                    {alt.shipsFromNonEU && (
+                      <p className="mt-0.5 text-[11px] text-foreground-tertiary">
+                        Versand ggf. aus Nicht-EU
+                      </p>
+                    )}
                   </div>
                   <div className="text-right">
                     <p className="text-[15px] font-bold tracking-tight">
