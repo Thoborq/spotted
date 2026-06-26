@@ -122,24 +122,26 @@ export async function searchWithGoogleLens(
 
     let gptResult: AnalysisResult | null = null;
     if (useGPT) {
-      const gptTimeout = new Promise<null>((resolve) =>
-        setTimeout(() => {
-          console.warn(
-            `[searchWithGoogleLens] GPT-Timeout nach ${GPT_TIMEOUT_MS}ms – Heuristik-Fallback.`,
-          );
-          resolve(null);
-        }, GPT_TIMEOUT_MS),
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+      const gptTimeoutPromise = new Promise<null>(
+        (resolve) => { timeoutId = setTimeout(() => resolve(null), GPT_TIMEOUT_MS); },
       );
       gptResult = await Promise.race([
         refineWithOpenAI(imageUrl, priced.slice(0, MAX_GPT_MATCHES)),
-        gptTimeout,
+        gptTimeoutPromise,
       ]);
+      if (timeoutId !== null) clearTimeout(timeoutId);
+      if (gptResult === null) {
+        console.warn(
+          `[searchWithGoogleLens] GPT-Timeout nach ${GPT_TIMEOUT_MS}ms – Heuristik-Fallback.`,
+        );
+      }
     }
 
     const result = gptResult ?? buildResultFromPriced(priced);
 
     if (result) {
-      const suffix = gptResult ? ", GPT-verfeinert" : useGPT ? ", GPT-Timeout/Fehler → Heuristik" : "";
+      const suffix = gptResult ? ", GPT-verfeinert" : useGPT ? ", GPT-Timeout → Heuristik" : "";
       console.log(
         `[searchWithGoogleLens] Live-Treffer: "${result.originalProduct.name}" (${matches.length} visual_matches${suffix}).`,
       );
