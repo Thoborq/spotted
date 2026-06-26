@@ -111,11 +111,6 @@ export async function searchWithGoogleLens(
     }
 
     return result;
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    const stack = error instanceof Error ? error.stack : "";
-    console.error(`[searchWithGoogleLens] Fehler: ${msg} — ${stack}`);
-    return null;
   } finally {
     if (blobUrl) {
       await del(blobUrl).catch((err) => {
