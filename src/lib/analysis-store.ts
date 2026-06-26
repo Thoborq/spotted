@@ -9,6 +9,7 @@ export type StoredAlternative = {
   price: number;
   savingsPercent: number;
   imageUrl?: string;
+  link?: string;
 };
 
 export type StoredAnalysis = {
@@ -21,7 +22,7 @@ export type StoredAnalysis = {
   icon: ProductIcon;
   tone: number;
   imageUrl?: string;
-  original: { store: string; price: number };
+  original: { store: string; price: number; link?: string };
   alternatives: StoredAlternative[];
 };
 
@@ -65,6 +66,7 @@ export function saveAnalysisResult(result: AnalysisResult): StoredAnalysis {
     original: {
       store: result.originalProduct.store,
       price: result.originalProduct.price,
+      link: result.originalProduct.link,
     },
     alternatives: [
       result.alternatives.best,

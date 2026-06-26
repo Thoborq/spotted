@@ -5,8 +5,10 @@ import { useRouter } from "next/navigation";
 import { saveAnalysisResult } from "@/lib/analysis-store";
 import type { AnalyzeResponse } from "@/lib/analysis-types";
 
-export const STAGE_COUNT = 3;
-const STAGE_DURATION = 1150;
+// Must match STAGE_COUNT in AnalysisProcessingOverlay.tsx.
+// 2.5 s per stage keeps the animation live throughout the real API call (6–15 s).
+export const STAGE_COUNT = 4;
+const STAGE_DURATION = 2500;
 const MIN_PROCESSING_MS = STAGE_DURATION * (STAGE_COUNT - 1);
 
 /**

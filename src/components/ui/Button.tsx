@@ -40,6 +40,14 @@ export default function Button({
   ({ href: string } | { href?: undefined }) &
   ButtonHTMLAttributes<HTMLButtonElement>) {
   if (href) {
+    const isExternal = href.startsWith("http://") || href.startsWith("https://");
+    if (isExternal) {
+      return (
+        <a href={href} target="_blank" rel="noopener noreferrer" className={buttonClasses(variant, size, className)}>
+          {children}
+        </a>
+      );
+    }
     return (
       <Link href={href} className={buttonClasses(variant, size, className)}>
         {children}

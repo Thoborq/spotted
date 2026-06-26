@@ -6,6 +6,7 @@ export type ProductSummary = {
   store: string;
   price: number;
   imageUrl?: string;
+  link?: string;
 };
 
 export type PriceRange = {
@@ -20,6 +21,7 @@ export type AlternativeProduct = {
   price: number;
   savingsPercent: number;
   imageUrl?: string;
+  link?: string;
 };
 
 /**

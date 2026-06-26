@@ -91,10 +91,12 @@ export default function AnalyseClient({ id }: { id: string }) {
               {formatPrice(original.price)}
             </p>
           </div>
-          <Button variant="ghost" size="sm">
-            <ExternalLink size={14} />
-            Shop
-          </Button>
+          {original.link && (
+            <Button href={original.link} variant="ghost" size="sm">
+              <ExternalLink size={14} />
+              Shop
+            </Button>
+          )}
         </Card>
 
         <div className="mt-7 flex items-center justify-between px-0.5">
@@ -110,9 +112,8 @@ export default function AnalyseClient({ id }: { id: string }) {
           {sortedAlternatives.map((alt) => {
             const meta = roleMeta[alt.role];
             const RoleIcon = meta.icon;
-            return (
+            const cardContent = (
               <Card
-                key={alt.role}
                 className={
                   alt.role === "best"
                     ? "border-accent-strong/40 bg-accent-soft/30 p-4"
@@ -122,6 +123,7 @@ export default function AnalyseClient({ id }: { id: string }) {
                 <div className="mb-3 inline-flex items-center gap-1.5 text-[11.5px] font-semibold uppercase tracking-wide text-accent-strong">
                   <RoleIcon size={13} strokeWidth={2} />
                   {meta.label}
+                  {alt.link && <ExternalLink size={11} className="ml-0.5 opacity-50" />}
                 </div>
                 <div className="flex items-center gap-4">
                   <ProductThumb icon={analysis.icon} tone={alt.role === "best" ? analysis.tone : (analysis.tone + 2)} size="md" src={alt.imageUrl} />
@@ -141,6 +143,20 @@ export default function AnalyseClient({ id }: { id: string }) {
                   </div>
                 </div>
               </Card>
+            );
+
+            return alt.link ? (
+              <a
+                key={alt.role}
+                href={alt.link}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block"
+              >
+                {cardContent}
+              </a>
+            ) : (
+              <div key={alt.role}>{cardContent}</div>
             );
           })}
         </div>

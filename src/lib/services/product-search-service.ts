@@ -6,6 +6,10 @@ const SERPAPI_ENDPOINT = "https://serpapi.com/search.json";
 const OPENAI_ENDPOINT = "https://api.openai.com/v1/chat/completions";
 // 1 Treffer als "Original", 3 weitere als eigenständige Alternativen.
 const MIN_PRICED_MATCHES = 4;
+// GPT bekommt nur die relevantesten Treffer – weniger Token, weniger Latenz.
+const MAX_GPT_MATCHES = 12;
+// Fällt GPT nicht innerhalb dieses Zeitraums zurück, greift die Heuristik.
+const GPT_TIMEOUT_MS = 9000;
 
 /** true, sobald SERPAPI_KEY gesetzt ist. */
 export function isProductSearchConfigured(): boolean {
@@ -15,14 +19,18 @@ export function isProductSearchConfigured(): boolean {
 type LensVisualMatch = {
   title?: string;
   source?: string;
+  link?: string;
   thumbnail?: string;
+  image?: string;
   price?: { extracted_value?: number };
 };
 
 type PricedMatch = {
   title: string;
   source?: string;
+  link?: string;
   thumbnail?: string;
+  image?: string;
   price: { extracted_value: number };
 };
 
@@ -45,7 +53,8 @@ type GPTRefinement = {
  *
  * Wenn OPENAI_API_KEY gesetzt ist und mind. MIN_PRICED_MATCHES preisgelistete
  * Treffer vorliegen, wird GPT-4o-mini zur Auswertung hinzugezogen. Schlägt
- * der GPT-Aufruf fehl, greift die Heuristik als Fallback ein.
+ * der GPT-Aufruf fehl oder überschreitet GPT_TIMEOUT_MS, greift die Heuristik
+ * als Fallback ein.
  */
 export async function searchWithGoogleLens(
   image: UploadedImage,
@@ -111,13 +120,26 @@ export async function searchWithGoogleLens(
       Boolean(process.env.OPENAI_API_KEY) &&
       priced.length >= MIN_PRICED_MATCHES;
 
-    const result = useGPT
-      ? ((await refineWithOpenAI(imageUrl, priced)) ??
-        buildResultFromPriced(priced))
-      : buildResultFromPriced(priced);
+    let gptResult: AnalysisResult | null = null;
+    if (useGPT) {
+      const gptTimeout = new Promise<null>((resolve) =>
+        setTimeout(() => {
+          console.warn(
+            `[searchWithGoogleLens] GPT-Timeout nach ${GPT_TIMEOUT_MS}ms – Heuristik-Fallback.`,
+          );
+          resolve(null);
+        }, GPT_TIMEOUT_MS),
+      );
+      gptResult = await Promise.race([
+        refineWithOpenAI(imageUrl, priced.slice(0, MAX_GPT_MATCHES)),
+        gptTimeout,
+      ]);
+    }
+
+    const result = gptResult ?? buildResultFromPriced(priced);
 
     if (result) {
-      const suffix = useGPT ? ", GPT-verfeinert" : "";
+      const suffix = gptResult ? ", GPT-verfeinert" : useGPT ? ", GPT-Timeout/Fehler → Heuristik" : "";
       console.log(
         `[searchWithGoogleLens] Live-Treffer: "${result.originalProduct.name}" (${matches.length} visual_matches${suffix}).`,
       );
@@ -238,10 +260,12 @@ async function refineWithOpenAI(
     const cheapest = priced[gpt.cheapestIndex];
     const premium = priced[gpt.premiumIndex];
     const prices = priced.map((m) => m.price.extracted_value);
-    const anyThumb = priced.find((m) => m.thumbnail)?.thumbnail;
+    const anyThumb = priced.find((m) => m.image ?? m.thumbnail)?.image ?? priced.find((m) => m.thumbnail)?.thumbnail;
 
     const brand = gpt.brand?.trim() || guessBrand(original.title);
     const category = gpt.category?.trim() || guessCategory(original.title);
+
+    const bestImageUrl = (m: PricedMatch) => m.image ?? m.thumbnail ?? anyThumb;
 
     const toAlternative = (
       match: PricedMatch,
@@ -259,7 +283,8 @@ async function refineWithOpenAI(
             100,
         ),
       ),
-      imageUrl: match.thumbnail ?? anyThumb,
+      imageUrl: bestImageUrl(match),
+      link: match.link,
     });
 
     return {
@@ -268,7 +293,8 @@ async function refineWithOpenAI(
         brand,
         store: original.source ?? "Unbekannter Shop",
         price: original.price.extracted_value,
-        imageUrl: original.thumbnail ?? anyThumb,
+        imageUrl: bestImageUrl(original),
+        link: original.link,
       },
       brand,
       category,
@@ -300,7 +326,9 @@ function buildResultFromPriced(priced: PricedMatch[]): AnalysisResult | null {
   const premium = sortedByPrice[sortedByPrice.length - 1];
   const best = sortedByPrice[Math.floor(sortedByPrice.length / 2)];
   const prices = priced.map((m) => m.price.extracted_value);
-  const anyThumb = priced.find((m) => m.thumbnail)?.thumbnail;
+  const anyThumb = priced.find((m) => m.image ?? m.thumbnail)?.image ?? priced.find((m) => m.thumbnail)?.thumbnail;
+
+  const bestImageUrl = (m: PricedMatch) => m.image ?? m.thumbnail ?? anyThumb;
 
   const toAlternative = (
     match: PricedMatch,
@@ -317,7 +345,8 @@ function buildResultFromPriced(priced: PricedMatch[]): AnalysisResult | null {
           100,
       ),
     ),
-    imageUrl: match.thumbnail ?? anyThumb,
+    imageUrl: bestImageUrl(match),
+    link: match.link,
   });
 
   const brand = guessBrand(original.title);
@@ -329,7 +358,8 @@ function buildResultFromPriced(priced: PricedMatch[]): AnalysisResult | null {
       brand,
       store: original.source ?? "Unbekannter Shop",
       price: original.price.extracted_value,
-      imageUrl: original.thumbnail ?? anyThumb,
+      imageUrl: bestImageUrl(original),
+      link: original.link,
     },
     brand,
     category,
