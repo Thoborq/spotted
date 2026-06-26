@@ -57,4 +57,5 @@ export type AnalysisResult = {
 export type AnalyzeResponse =
   | { status: "ok"; result: AnalysisResult }
   | { status: "not_configured" }
-  | { status: "no_match" };
+  | { status: "no_match" }
+  | { status: "no_eu_shop" };

@@ -17,7 +17,7 @@ const MIN_PROCESSING_MS = STAGE_DURATION * (STAGE_COUNT - 1);
  * geliefert (zu wenige Treffer, Netzwerk-/Serverfehler). In beiden Fällen
  * wird NIE ein Dummy-Ergebnis als echte Analyse angezeigt.
  */
-export type AnalysisOutcome = "not_configured" | "failed";
+export type AnalysisOutcome = "not_configured" | "failed" | "no_eu_shop";
 
 export function useAnalysisFlow() {
   const router = useRouter();
@@ -60,7 +60,9 @@ export function useAnalysisFlow() {
       }
 
       setStageIndex(null);
-      setOutcome(data.status === "not_configured" ? "not_configured" : "failed");
+      if (data.status === "not_configured") setOutcome("not_configured");
+      else if (data.status === "no_eu_shop") setOutcome("no_eu_shop");
+      else setOutcome("failed");
     } catch (error) {
       console.error("Analyse fehlgeschlagen:", error);
       setStageIndex(null);

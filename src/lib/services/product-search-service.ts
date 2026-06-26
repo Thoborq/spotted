@@ -4,102 +4,117 @@ import type { UploadedImage } from "../upload";
 
 const SERPAPI_ENDPOINT = "https://serpapi.com/search.json";
 const OPENAI_ENDPOINT = "https://api.openai.com/v1/chat/completions";
-// 1 Treffer als "Original", 3 weitere als eigenständige Alternativen.
-const MIN_PRICED_MATCHES = 4;
-// GPT bekommt nur die relevantesten Treffer – weniger Token, weniger Latenz.
+const MIN_EU_MATCHES = 4;
 const MAX_GPT_MATCHES = 12;
-// Fällt GPT nicht innerhalb dieses Zeitraums zurück, greift die Heuristik.
 const GPT_TIMEOUT_MS = 9000;
 
 // ---------------------------------------------------------------------------
-// Shop-Qualität: Bevorzuge seriöse EU-Shops mit Versand nach Deutschland.
+// EU eligibility: EUR-only, no US/non-EU shops, no fallback.
 // ---------------------------------------------------------------------------
 
-const PREFERRED_EU_SHOPS = [
-  "zalando", "about you", "aboutyou", "breuninger",
-  "peek & cloppenburg", "peek cloppenburg", "p&c",
-  "farfetch", "end.", "end clothing", "ssense",
+const EU_TLD = /\.(de|at|ch|nl|fr|it|es|be|dk|se|fi|pl|pt|ie|eu)\b/;
+
+// Known EU shops that may use .com domains but ship to DE/EU with EUR prices.
+const KNOWN_EU_SHOP_SOURCES = [
+  "zalando", "about you", "aboutyou",
+  "breuninger", "peek & cloppenburg", "peek cloppenburg",
   "mytheresa", "luisaviaroma", "luisa via roma",
+  "farfetch", "end.", "end clothing", "ssense",
   "mr porter", "mrporter", "net-a-porter", "netaporter", "yoox",
-  "snipes", "solebox", "overkill", "footpatrol",
-  "asos", "zooplus", "planet sports",
+  "bstn", "solebox", "hhv", "snipes", "asphaltgold", "43einhalb",
+  "foot locker", "footlocker", "jd sports",
+  "footshop", "sizeer", "footpatrol", "overkill",
+  "deichmann", "görtz", "goertz", "humanic",
+  "planet sports", "intersport", "decathlon",
+  "galeries lafayette", "el corte ingles", "la redoute",
+  "asos", "c&a",
 ];
+
+// Hard-excluded — never show these regardless of currency.
+const EXCLUDED_SHOP_SOURCES = [
+  "walmart", "target", "macy", "nordstrom",
+  "kohls", "kohl's", "jcpenney", "sears", "belk", "dillards",
+  "tj maxx", "tjmaxx", "ross ", "bloomingdale", "neiman marcus",
+  "saks fifth", "footaction", "champs sports",
+  "dick's sporting", "academy sports",
+];
+
+function isEUEligible(m: PricedMatch): boolean {
+  // EUR price is a hard requirement — no exceptions.
+  if (m.price.currency !== "€") return false;
+
+  const src = (m.source ?? "").toLowerCase();
+  const href = (m.link ?? "").toLowerCase();
+
+  // Hard-exclude known non-EU shops.
+  if (EXCLUDED_SHOP_SOURCES.some((s) => src.includes(s) || href.includes(s.replace(/ /g, "")))) {
+    return false;
+  }
+
+  // Everything else with an EUR price passes (gl=de makes non-EU EUR prices rare).
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Shop priority scoring.
+// Priority: official brand EU > German shops > DACH/EU TLD > premium intl.
+// Farfetch and similar are Tier 6 (premium intl.) — they should NOT dominate.
+// ---------------------------------------------------------------------------
 
 const OFFICIAL_BRAND_DOMAINS = [
-  "nike.com", "adidas.com", "puma.com", "reebok.com",
-  "newbalance.com", "converse.com", "vans.com",
-  "tommy.com", "calvinklein.com", "ralphlauren.com",
-  "lacoste.com", "hugoboss.com", "zara.com",
-  "uniqlo.com", "mango.com", "gucci.com", "prada.com",
-  "louisvuitton.com", "dior.com", "balenciaga.com",
-  "versace.com", "burberry.com", "thenorthface.com",
-  "patagonia.com", "apple.com", "samsung.com",
-  "levi.com", "levis.com", "gap.com",
+  "nike", "adidas", "puma", "reebok", "newbalance", "new-balance",
+  "converse", "vans", "tommy", "calvinklein", "ralphlauren", "lacoste",
+  "hugoboss", "zara", "uniqlo", "mango", "gucci", "prada",
+  "louisvuitton", "dior", "balenciaga", "versace", "burberry",
+  "thenorthface", "patagonia", "apple", "samsung", "sony",
+  "levi", "gap", "hm", "cos", "arket", "filippa",
 ];
 
-const AVOID_SHOPS = [
-  "walmart", "target.com", "macy", "nordstrom rack", "nordstromrack",
-  "kohls", "kohl's", "jcpenney", "sears", "belk", "dillards",
-  "tj maxx", "tjmaxx", "ross stores", "Burlington coat",
+const GERMAN_SHOPS = [
+  "zalando", "about you", "aboutyou", "breuninger",
+  "peek & cloppenburg", "peek cloppenburg",
+  "snipes", "bstn", "solebox", "hhv",
+  "asphaltgold", "43einhalb", "footpatrol", "overkill",
+  "planet sports", "görtz", "goertz", "deichmann",
+  "foot locker", "footlocker", "jd sports",
 ];
 
-const EU_TLDS = /\.(de|at|ch|fr|nl|es|it|be|dk|se|no|fi|pl|pt|ie|cz|sk|hu|ro|bg|hr|si|lt|lv|ee|mt|cy|lu|gr)\b/;
+// Premium shops that ship to EU — valid, but lower priority than DE/brand stores.
+const PREMIUM_EU_INTL = [
+  "farfetch", "mytheresa", "ssense",
+  "mr porter", "mrporter", "net-a-porter", "netaporter",
+  "yoox", "luisaviaroma", "luisa via roma",
+  "end.", "end clothing",
+];
 
 function shopScore(m: PricedMatch): number {
   const src = (m.source ?? "").toLowerCase();
   const href = (m.link ?? "").toLowerCase();
-  const currency = m.price.currency;
 
-  let score = 0;
-
-  // Currency: EUR is the strongest EU signal
-  if (currency === "€") score += 25;
-  else if (currency === "£") score -= 8;
-  else if (currency === "$" || currency === "USD") score -= 20;
-
-  // Preferred EU fashion/lifestyle shops
-  if (PREFERRED_EU_SHOPS.some((s) => src.includes(s))) score += 30;
-
-  // Official brand domains (reliable, ship to EU)
-  if (OFFICIAL_BRAND_DOMAINS.some((d) => href.includes(d))) score += 15;
-
-  // EU country-code TLD in product link
-  if (EU_TLDS.test(href)) score += 12;
-
-  // Known US-only shops to avoid
-  if (AVOID_SHOPS.some((s) => src.includes(s) || href.includes(s.replace(/ /g, "")))) {
-    score -= 35;
+  // Tier 1 (90): Official brand's own German/EU domain (e.g. adidas.de, nike.com/de)
+  const isBrand = OFFICIAL_BRAND_DOMAINS.some((d) => href.includes(d));
+  if (isBrand) {
+    if (/\.de\b/.test(href) || /\.com\/(de|eu|at|ch)/.test(href)) return 90;
+    return 50; // brand .com without a DE/EU path
   }
 
-  // US locale markers in URL
-  if (/\/en-us\/|\/us\/|\/en_us\//.test(href)) score -= 12;
+  // Tier 2 (80): Established German shops
+  if (GERMAN_SHOPS.some((s) => src.includes(s))) return 80;
 
-  return score;
-}
+  // Tier 3 (60): Any .de domain
+  if (/\.de\b/.test(href)) return 60;
 
-function isNonEUShop(m: PricedMatch): boolean {
-  const src = (m.source ?? "").toLowerCase();
-  const href = (m.link ?? "").toLowerCase();
-  const currency = m.price.currency;
+  // Tier 4 (50): DACH — Austria, Switzerland
+  if (/\.(at|ch)\b/.test(href)) return 50;
 
-  // EUR price is a strong EU signal
-  if (currency === "€") return false;
+  // Tier 5 (40): Other EU TLDs
+  if (EU_TLD.test(href)) return 40;
 
-  // Known preferred EU shops
-  if (PREFERRED_EU_SHOPS.some((s) => src.includes(s))) return false;
+  // Tier 6 (30): Premium shops with EU shipping (Farfetch, Mytheresa, SSENSE, …)
+  if (PREMIUM_EU_INTL.some((s) => src.includes(s))) return 30;
 
-  // EU country-code TLD
-  if (EU_TLDS.test(href)) return false;
-
-  // Official brand EU domain
-  if (OFFICIAL_BRAND_DOMAINS.some((d) => href.includes(d + "/de") || href.includes(d + "/eu"))) return false;
-
-  // Clear non-EU signals
-  if (AVOID_SHOPS.some((s) => src.includes(s))) return true;
-  if (currency === "$" || currency === "USD") return true;
-  if (currency === "£" && !href.includes(".eu")) return true;
-
-  return false;
+  // Tier 7 (10): Unknown EUR shop (benefit of the doubt — gl=de already narrows results)
+  return 10;
 }
 
 /** true, sobald SERPAPI_KEY gesetzt ist. */
@@ -137,15 +152,16 @@ type GPTRefinement = {
 };
 
 /**
- * Echte Bildsuche über SerpAPI Google Lens, optional verfeinert durch GPT.
+ * Echte Bildsuche über SerpAPI Google Lens.
  *
- * Ergebnisse werden nach EU-Shop-Qualität sortiert und auf EUR-Preise
- * gefiltert (wenn ausreichend vorhanden). Ziel: nur seriöse Shops mit
- * Versand nach Deutschland.
+ * Rückgabewerte:
+ *   AnalysisResult — Treffer mit ≥4 seriösen EU-Shops (EUR-Preise)
+ *   "no_eu_shop"   — SerpAPI fand Treffer, aber keiner erfüllt EU-Kriterien
+ *   null           — Fehler oder zu wenige Gesamttreffer
  */
 export async function searchWithGoogleLens(
   image: UploadedImage,
-): Promise<AnalysisResult | null> {
+): Promise<AnalysisResult | null | "no_eu_shop"> {
   const apiKey = process.env.SERPAPI_KEY;
   if (!apiKey) return null;
 
@@ -182,7 +198,6 @@ export async function searchWithGoogleLens(
     url.searchParams.set("engine", "google_lens");
     url.searchParams.set("url", imageUrl);
     url.searchParams.set("api_key", apiKey);
-    // Germany locale → SerpAPI returns EU results with EUR prices
     url.searchParams.set("hl", "de");
     url.searchParams.set("gl", "de");
 
@@ -202,19 +217,28 @@ export async function searchWithGoogleLens(
         typeof m.price?.extracted_value === "number" && Boolean(m.title),
     );
 
-    // Sort by EU/shop quality — best EU shops first
-    const sortedPriced = [...rawPriced].sort(
-      (a, b) => shopScore(b) - shopScore(a),
-    );
+    // Strict EU filter: EUR-only, no US shops. No fallback to non-EUR.
+    const euPriced = rawPriced.filter(isEUEligible);
 
-    // Prefer EUR-only results; fall back to quality-sorted all only if too few EUR matches
-    const eurPriced = sortedPriced.filter((m) => m.price.currency === "€");
-    const priced =
-      eurPriced.length >= MIN_PRICED_MATCHES ? eurPriced : sortedPriced;
+    if (rawPriced.length >= MIN_EU_MATCHES && euPriced.length < MIN_EU_MATCHES) {
+      console.log(
+        `[searchWithGoogleLens] ${rawPriced.length} Preiseinträge, aber nur ${euPriced.length} EU-geeignet → no_eu_shop.`,
+      );
+      return "no_eu_shop";
+    }
+
+    if (euPriced.length < MIN_EU_MATCHES) {
+      console.log(
+        `[searchWithGoogleLens] Zu wenige EU-Treffer: ${euPriced.length}/${rawPriced.length} von ${matches.length} gesamt.`,
+      );
+      return null;
+    }
+
+    // Sort by shop quality — best EU shop first.
+    const sorted = [...euPriced].sort((a, b) => shopScore(b) - shopScore(a));
 
     const useGPT =
-      Boolean(process.env.OPENAI_API_KEY) &&
-      priced.length >= MIN_PRICED_MATCHES;
+      Boolean(process.env.OPENAI_API_KEY) && sorted.length >= MIN_EU_MATCHES;
 
     let gptResult: AnalysisResult | null = null;
     if (useGPT) {
@@ -223,7 +247,7 @@ export async function searchWithGoogleLens(
         (resolve) => { timeoutId = setTimeout(() => resolve(null), GPT_TIMEOUT_MS); },
       );
       gptResult = await Promise.race([
-        refineWithOpenAI(imageUrl, priced.slice(0, MAX_GPT_MATCHES)),
+        refineWithOpenAI(imageUrl, sorted.slice(0, MAX_GPT_MATCHES)),
         gptTimeoutPromise,
       ]);
       if (timeoutId !== null) clearTimeout(timeoutId);
@@ -234,7 +258,7 @@ export async function searchWithGoogleLens(
       }
     }
 
-    const result = gptResult ?? buildResultFromPriced(priced);
+    const result = gptResult ?? buildResultFromPriced(sorted);
 
     if (result) {
       const suffix = gptResult
@@ -242,13 +266,8 @@ export async function searchWithGoogleLens(
         : useGPT
           ? ", GPT-Timeout → Heuristik"
           : "";
-      const eurCount = eurPriced.length;
       console.log(
-        `[searchWithGoogleLens] Live-Treffer: "${result.originalProduct.name}" (${matches.length} matches, ${eurCount} EUR${suffix}).`,
-      );
-    } else {
-      console.log(
-        `[searchWithGoogleLens] Zu wenige preisgelistete Treffer (${matches.length} visual_matches insgesamt) - kein echtes Ergebnis.`,
+        `[searchWithGoogleLens] "${result.originalProduct.name}" – ${euPriced.length} EU-Treffer von ${matches.length} gesamt${suffix}.`,
       );
     }
 
@@ -274,7 +293,7 @@ async function refineWithOpenAI(
     title: m.title,
     store: m.source ?? "Unknown",
     price: m.price.extracted_value,
-    currency: m.price.currency ?? "?",
+    currency: m.price.currency ?? "€",
   }));
 
   try {
@@ -300,21 +319,19 @@ async function refineWithOpenAI(
                 type: "text",
                 text: [
                   "You analyze a product photo for a German price comparison app.",
-                  `Google Lens results (pre-sorted by EU shop quality): ${JSON.stringify(matchList)}`,
+                  `Candidates (pre-sorted by EU shop quality, all EUR prices, all ship to Germany): ${JSON.stringify(matchList)}`,
                   "",
                   'Return JSON: {"originalIndex":0,"bestIndex":1,"cheapestIndex":2,"premiumIndex":3,"productName":"Nike Air Max 97","brand":"Nike","category":"Schuhe","confidence":82}',
                   "",
                   "Rules:",
-                  "- originalIndex: best visual match for the product shown in the image",
-                  "- bestIndex: best value-for-money from a reputable EU/German shop (prefer Zalando, About You, Farfetch, Breuninger, or official brand sites like adidas.com)",
-                  "- cheapestIndex: lowest EUR price from a trustworthy shop (different from original and best)",
-                  "- premiumIndex: premium option from a luxury/curated shop (Farfetch, Mytheresa, SSENSE, Mr Porter or similar — different from all others)",
-                  "- All four indices must be different from each other",
-                  "- Strongly prefer EUR (€) prices over USD ($) or GBP (£)",
-                  "- Avoid Walmart, Target, Macy's, and unknown US-only marketplaces",
-                  "- productName: clean name without store/size/color info",
-                  "- category must be one of: Schuhe, Hoodie, Shirt, Jacke, Hose, Uhr, Tasche, Gürtel, Brille, Kleid, Produkt",
-                  "- confidence: integer 50-95",
+                  "- originalIndex: best visual match for the product in the image",
+                  "- bestIndex: best value from a German/brand shop (prefer Zalando, About You, Breuninger, official brand sites like adidas.com or adidas.de)",
+                  "- cheapestIndex: lowest EUR price (must differ from original and best)",
+                  "- premiumIndex: premium option — Farfetch, Mytheresa, SSENSE, or Mr Porter preferred (must differ from all others)",
+                  "- All four indices MUST be different from each other",
+                  "- productName: clean brand + product name only, no store/size/color info",
+                  "- category: one of Schuhe, Hoodie, Shirt, Jacke, Hose, Uhr, Tasche, Gürtel, Brille, Kleid, Produkt",
+                  "- confidence: integer 50–95",
                 ].join("\n"),
               },
             ],
@@ -366,7 +383,7 @@ async function refineWithOpenAI(
 
     const brand = gpt.brand?.trim() || guessBrand(original.title);
     const category = gpt.category?.trim() || guessCategory(original.title);
-    const bestImageUrl = (m: PricedMatch) => m.image ?? m.thumbnail ?? anyThumb;
+    const bestImg = (m: PricedMatch) => m.image ?? m.thumbnail ?? anyThumb;
 
     const toAlternative = (
       match: PricedMatch,
@@ -382,9 +399,9 @@ async function refineWithOpenAI(
           (1 - match.price.extracted_value / original.price.extracted_value) * 100,
         ),
       ),
-      imageUrl: bestImageUrl(match),
+      imageUrl: bestImg(match),
       link: match.link,
-      shipsFromNonEU: isNonEUShop(match),
+      shipsFromNonEU: false,
     });
 
     return {
@@ -393,7 +410,7 @@ async function refineWithOpenAI(
         brand,
         store: original.source ?? "Unbekannter Shop",
         price: original.price.extracted_value,
-        imageUrl: bestImageUrl(original),
+        imageUrl: bestImg(original),
         link: original.link,
       },
       brand,
@@ -413,9 +430,9 @@ async function refineWithOpenAI(
 }
 
 function buildResultFromPriced(priced: PricedMatch[]): AnalysisResult | null {
-  if (priced.length < MIN_PRICED_MATCHES) return null;
+  if (priced.length < MIN_EU_MATCHES) return null;
 
-  // priced is already sorted by shop quality; first entry is the best EU match.
+  // priced is sorted by shop quality; first entry is the best EU match.
   const [original, ...rest] = priced;
   const sortedByPrice = [...rest].sort(
     (a, b) => a.price.extracted_value - b.price.extracted_value,
@@ -429,7 +446,7 @@ function buildResultFromPriced(priced: PricedMatch[]): AnalysisResult | null {
     priced.find((m) => m.image ?? m.thumbnail)?.image ??
     priced.find((m) => m.thumbnail)?.thumbnail;
 
-  const bestImageUrl = (m: PricedMatch) => m.image ?? m.thumbnail ?? anyThumb;
+  const bestImg = (m: PricedMatch) => m.image ?? m.thumbnail ?? anyThumb;
 
   const toAlternative = (
     match: PricedMatch,
@@ -445,9 +462,9 @@ function buildResultFromPriced(priced: PricedMatch[]): AnalysisResult | null {
         (1 - match.price.extracted_value / original.price.extracted_value) * 100,
       ),
     ),
-    imageUrl: bestImageUrl(match),
+    imageUrl: bestImg(match),
     link: match.link,
-    shipsFromNonEU: isNonEUShop(match),
+    shipsFromNonEU: false,
   });
 
   const brand = guessBrand(original.title);
@@ -459,7 +476,7 @@ function buildResultFromPriced(priced: PricedMatch[]): AnalysisResult | null {
       brand,
       store: original.source ?? "Unbekannter Shop",
       price: original.price.extracted_value,
-      imageUrl: bestImageUrl(original),
+      imageUrl: bestImg(original),
       link: original.link,
     },
     brand,

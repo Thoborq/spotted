@@ -54,10 +54,12 @@ export async function POST(request: Request) {
 
   try {
     const liveResult = await searchWithGoogleLens(image);
+    if (liveResult === "no_eu_shop") {
+      return NextResponse.json({ status: "no_eu_shop" } satisfies AnalyzeResponse);
+    }
     if (liveResult) {
       return NextResponse.json({ status: "ok", result: liveResult } satisfies AnalyzeResponse);
     }
-
     return NextResponse.json({ status: "no_match" } satisfies AnalyzeResponse);
   } catch (error) {
     console.error("[/api/analyze] SerpAPI-Aufruf fehlgeschlagen:", error);

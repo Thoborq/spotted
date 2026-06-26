@@ -10,6 +10,10 @@ const COPY: Record<AnalysisOutcome, { title: string; subtitle: string }> = {
     title: "Kein Ergebnis gefunden",
     subtitle: "Versuche es mit einem anderen Foto oder einem deutlicheren Ausschnitt.",
   },
+  no_eu_shop: {
+    title: "Kein EU-Shop gefunden",
+    subtitle: "Momentan kein seriöser EU-Shop für dieses Produkt verfügbar.",
+  },
 };
 
 export default function AnalysisUnavailable({
