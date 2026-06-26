@@ -195,8 +195,9 @@ async function refineWithOpenAI(
     });
 
     if (!response.ok) {
+      const body = await response.text().catch(() => "(body unreadable)");
       console.error(
-        `[refineWithOpenAI] OpenAI API antwortete mit HTTP ${response.status}`,
+        `[refineWithOpenAI] HTTP ${response.status}: ${body.slice(0, 400)}`,
       );
       return null;
     }
