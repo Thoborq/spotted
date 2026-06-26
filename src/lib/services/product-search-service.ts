@@ -106,7 +106,7 @@ export async function searchWithGoogleLens(
     );
 
     const useGPT =
-      Boolean(process.env.OPENAI_API_KEY ?? process.env.OPEN_API_KEY) &&
+      Boolean(process.env.OPENAI_API_KEY) &&
       priced.length >= MIN_PRICED_MATCHES;
 
     const result = useGPT
@@ -139,8 +139,7 @@ async function refineWithOpenAI(
   imageUrl: string,
   priced: PricedMatch[],
 ): Promise<AnalysisResult | null> {
-  // Accept both the canonical name and the common typo variant.
-  const apiKey = process.env.OPENAI_API_KEY ?? process.env.OPEN_API_KEY;
+  const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return null;
 
   const matchList = priced.map((m, i) => ({
