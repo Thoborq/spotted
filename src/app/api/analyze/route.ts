@@ -22,8 +22,9 @@ import type { AnalyzeResponse } from "@/lib/analysis-types";
  *    - Kein brauchbarer Treffer oder Aufruf fehlgeschlagen ->
  *      { status: "no_match" }.
  *
- * Es ist bewusst kein Vision-LLM (OpenAI/Gemini/Claude) im Spiel - SerpAPI
- * Google Lens identifiziert und vergleicht Preise in einem Schritt.
+ * Falls OPENAI_API_KEY gesetzt ist, verfeinert GPT-4o-mini die SerpAPI-Treffer
+ * (Produktname, Marke, Kategorie, beste Alternativenauswahl) — optional, mit
+ * Heuristik-Fallback wenn nicht gesetzt oder GPT fehlschlägt.
  */
 export async function POST(request: Request) {
   let formData: FormData;
@@ -59,9 +60,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ status: "no_match" } satisfies AnalyzeResponse);
   } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
     console.error("[/api/analyze] SerpAPI-Aufruf fehlgeschlagen:", error);
-    // TEMPORARY DIAGNOSTIC — remove before shipping
-    return NextResponse.json({ status: "no_match", _debug: msg } as AnalyzeResponse & { _debug: string });
+    return NextResponse.json({ status: "no_match" } satisfies AnalyzeResponse);
   }
 }

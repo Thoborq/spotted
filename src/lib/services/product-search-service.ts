@@ -1,4 +1,4 @@
-import { del, put } from "@vercel/blob";
+import { del, issueSignedToken, presignUrl, put } from "@vercel/blob";
 import type { AlternativeProduct, AnalysisResult } from "../analysis-types";
 import type { UploadedImage } from "../upload";
 
@@ -63,13 +63,28 @@ export async function searchWithGoogleLens(
     const blob = await put(
       `spotted-scans/${Date.now()}.${extension}`,
       image.buffer,
-      { access: "public", contentType: image.mimeType },
+      { access: "private", contentType: image.mimeType },
     );
     blobUrl = blob.url;
 
+    // The store is private-only so we need a presigned GET URL that SerpAPI
+    // (and GPT vision) can access without authentication headers.
+    const validUntil = Date.now() + 3 * 60 * 1000; // 3 minutes
+    const signedToken = await issueSignedToken({
+      pathname: blob.pathname,
+      operations: ["get"],
+      validUntil,
+    });
+    const { presignedUrl: imageUrl } = await presignUrl(signedToken, {
+      operation: "get",
+      pathname: blob.pathname,
+      access: "private",
+      validUntil,
+    });
+
     const url = new URL(SERPAPI_ENDPOINT);
     url.searchParams.set("engine", "google_lens");
-    url.searchParams.set("url", blob.url);
+    url.searchParams.set("url", imageUrl);
     url.searchParams.set("api_key", apiKey);
 
     const response = await fetch(url.toString());
@@ -95,7 +110,7 @@ export async function searchWithGoogleLens(
       priced.length >= MIN_PRICED_MATCHES;
 
     const result = useGPT
-      ? ((await refineWithOpenAI(blob.url, priced)) ??
+      ? ((await refineWithOpenAI(imageUrl, priced)) ??
         buildResultFromPriced(priced))
       : buildResultFromPriced(priced);
 
