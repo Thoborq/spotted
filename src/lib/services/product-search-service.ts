@@ -112,7 +112,9 @@ export async function searchWithGoogleLens(
 
     return result;
   } catch (error) {
-    console.error("SerpAPI Google Lens Aufruf fehlgeschlagen:", error);
+    const msg = error instanceof Error ? error.message : String(error);
+    const stack = error instanceof Error ? error.stack : "";
+    console.error(`[searchWithGoogleLens] Fehler: ${msg} — ${stack}`);
     return null;
   } finally {
     if (blobUrl) {
