@@ -59,7 +59,9 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ status: "no_match" } satisfies AnalyzeResponse);
   } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
     console.error("[/api/analyze] SerpAPI-Aufruf fehlgeschlagen:", error);
-    return NextResponse.json({ status: "no_match" } satisfies AnalyzeResponse);
+    // TEMPORARY DIAGNOSTIC — remove before shipping
+    return NextResponse.json({ status: "no_match", _debug: msg } as AnalyzeResponse & { _debug: string });
   }
 }
