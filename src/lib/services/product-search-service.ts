@@ -144,7 +144,7 @@ const PREMIUM_EU_INTL = [
 ];
 
 // Shops to target with dedicated site: queries in parallel with the general Shopping search.
-// These are the most relevant EU shops for fashion products.
+// Ordered by trust/relevance: DE generalists → DE specialists → premium EU intl.
 const PRIORITY_SHOP_SITES = [
   "zalando.de",
   "aboutyou.de",
@@ -152,6 +152,9 @@ const PRIORITY_SHOP_SITES = [
   "peek-cloppenburg.de",
   "ralphlauren.de",
   "farfetch.com",
+  "mrporter.com",
+  "mytheresa.com",
+  "luisaviaroma.com",
 ] as const;
 
 function shopScore(m: PricedMatch): number {
@@ -659,17 +662,14 @@ export async function searchWithGoogleLens(
       });
 
       allEU = deduplicate([...allEU, ...stage1EU]);
-      console.log(`[Stage 1] Pool: ${allEU.length} EU results`);
-
-      if (allEU.length >= MIN_EU_MATCHES) {
-        const sorted = allEU.sort((a, b) => shopScore(b) - shopScore(a));
-        const result = await finalizeResult(imageUrl, sorted, productAnalysis);
-        if (result) return result;
-      }
+      console.log(`[Stage 1] Pool: ${allEU.length} EU results — continuing to Stage 2 to collect more candidates`);
     }
 
     // -----------------------------------------------------------------------
     // Stage 2: no-brand queries (higher recall) OR top Lens titles as last resort.
+    // Always runs — we want the full pool before calling finalizeResult once.
+    // When Stage 1 left < MIN_FOR_GPT linked results, we also fire site: queries
+    // for the best no-brand query so GPT has enough distinct items to fill 4 roles.
     // -----------------------------------------------------------------------
     const stage2QueryStrings: string[] = nobrandQueries.length > 0
       ? nobrandQueries.map((q) => q.query)
@@ -680,11 +680,20 @@ export async function searchWithGoogleLens(
           .filter(Boolean);
 
     if (stage2QueryStrings.length > 0) {
-      console.log(`[Stage 2] Fallback queries (${stage2QueryStrings.length}):`);
-      stage2QueryStrings.forEach((q, i) => console.log(`  S2[${i}] "${q}"`));
-      const fallbackResults = await Promise.all(
-        stage2QueryStrings.slice(0, 5).map((q) => textSearch(q, apiKey)),
-      );
+      const linkedAfterStage1 = allEU.filter((m) => Boolean(m.link)).length;
+
+      // When Stage 1 is thin (< 4 linked items), supplement with site: queries
+      // for the first no-brand query against the top priority shops.
+      const siteSupplements: string[] =
+        linkedAfterStage1 < MIN_FOR_GPT && stage2QueryStrings[0]
+          ? PRIORITY_SHOP_SITES.slice(0, 5).map((site) => `${stage2QueryStrings[0]} site:${site}`)
+          : [];
+
+      const allStage2Queries = [...stage2QueryStrings.slice(0, 5), ...siteSupplements];
+      console.log(`[Stage 2] ${allStage2Queries.length} queries (${stage2QueryStrings.slice(0, 5).length} no-brand + ${siteSupplements.length} site:):`);
+      allStage2Queries.forEach((q, i) => console.log(`  S2[${i}] "${q}"`));
+
+      const fallbackResults = await Promise.all(allStage2Queries.map((q) => textSearch(q, apiKey)));
       const fallbackAll = fallbackResults.flat();
       const fallbackEU = fallbackAll.filter(isEUEligible);
       hadAnyPricedResults = hadAnyPricedResults || fallbackAll.length > 0;
@@ -700,12 +709,13 @@ export async function searchWithGoogleLens(
 
       allEU = deduplicate([...allEU, ...fallbackEU]);
       console.log(`[Stage 2] Pool after fallback: ${allEU.length} EU results`);
+    }
 
-      if (allEU.length >= MIN_EU_MATCHES) {
-        const sorted = allEU.sort((a, b) => shopScore(b) - shopScore(a));
-        const result = await finalizeResult(imageUrl, sorted, productAnalysis);
-        if (result) return result;
-      }
+    // Finalize once with the full combined pool from Stage 1 + Stage 2.
+    if (allEU.length >= MIN_EU_MATCHES) {
+      const sorted = allEU.sort((a, b) => shopScore(b) - shopScore(a));
+      const result = await finalizeResult(imageUrl, sorted, productAnalysis);
+      if (result) return result;
     }
 
     // -----------------------------------------------------------------------
