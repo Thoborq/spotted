@@ -129,6 +129,17 @@ const PREMIUM_EU_INTL = [
   "end.", "end clothing",
 ];
 
+// Shops to target with dedicated site: queries in parallel with the general Shopping search.
+// These are the most relevant EU shops for fashion products.
+const PRIORITY_SHOP_SITES = [
+  "zalando.de",
+  "aboutyou.de",
+  "breuninger.com",
+  "peek-cloppenburg.de",
+  "ralphlauren.de",
+  "farfetch.com",
+] as const;
+
 function shopScore(m: PricedMatch): number {
   const src = (m.source ?? "").toLowerCase();
   const href = (m.link ?? "").toLowerCase();
@@ -441,25 +452,40 @@ export async function searchWithGoogleLens(
     let hadAnyPricedResults = lensPriced.length > 0;
 
     // -----------------------------------------------------------------------
-    // Stage 1: PRIMARY — Google Shopping with GPT's precise color-aware query.
-    // This is the main source of EU results; Lens is just a supplementary pool.
+    // Stage 1: PRIMARY — general Shopping query + parallel site-specific queries
+    // for the top EU fashion shops. All run in one Promise.all batch so total
+    // latency is max(slowest single request) rather than sequential.
+    // Lens remains a supplementary pool only.
     // -----------------------------------------------------------------------
     if (productAnalysis?.primaryQuery) {
-      console.log(`[Stage 1] Primary Shopping query: "${productAnalysis.primaryQuery}"`);
-      const primary = await textSearch(productAnalysis.primaryQuery, apiKey);
-      const primaryEU = primary.filter(isEUEligible);
-      hadAnyPricedResults = hadAnyPricedResults || primary.length > 0;
+      const baseQuery = productAnalysis.primaryQuery;
 
-      console.log(`[Stage 1] ${primary.length} results, ${primaryEU.length} EU-eligible`);
-      primary.forEach((m, i) => {
+      // Build query list: 1 general + 1 per priority shop
+      const stage1Queries: string[] = [
+        baseQuery,
+        ...PRIORITY_SHOP_SITES.map((site) => `${baseQuery} site:${site}`),
+      ];
+
+      console.log(`[Stage 1] Firing ${stage1Queries.length} parallel Shopping searches`);
+      stage1Queries.forEach((q, i) => console.log(`  S1[${i}] "${q}"`));
+
+      const stage1Raw = await Promise.all(stage1Queries.map((q) => textSearch(q, apiKey)));
+      const stage1All = stage1Raw.flat();
+      const stage1EU = stage1All.filter(isEUEligible);
+      hadAnyPricedResults = hadAnyPricedResults || stage1All.length > 0;
+
+      console.log(`[Stage 1] ${stage1All.length} total, ${stage1EU.length} EU-eligible`);
+      stage1All.forEach((m, i) => {
         const r = euRejectReason(m);
         if (r !== "passes" && r !== "passes(eu_tld)" && r !== "passes(known_eu)") {
-          console.log(`  P[${i}] REJECTED: "${m.title.slice(0, 40)}" | src="${m.source}" | cur="${m.price.currency}" | ${r}`);
+          console.log(
+            `  S1[${i}] REJECTED: "${m.title.slice(0, 40)}" | src="${m.source}" | cur="${m.price.currency}" | ${r}`,
+          );
         }
       });
 
-      allEU = deduplicate([...allEU, ...primaryEU]);
-      console.log(`[Stage 1] Pool after primary: ${allEU.length} EU results`);
+      allEU = deduplicate([...allEU, ...stage1EU]);
+      console.log(`[Stage 1] Pool: ${allEU.length} EU results`);
 
       if (allEU.length >= MIN_EU_MATCHES) {
         const sorted = allEU.sort((a, b) => shopScore(b) - shopScore(a));
