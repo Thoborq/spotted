@@ -203,26 +203,44 @@ type ShoppingApiResult = {
   price?: string;
 };
 
-type ProductAnalysis = {
+// Exported so the debug endpoint and tests can reuse the type.
+export type ProductAnalysis = {
   // Core identification
   productType: string;         // "Polo T-Shirt" | "Daunenjacke" | "Laufschuhe" | ...
-  category: string;            // maps to UI category: Shirt | Jacke | Schuhe | Hose | ...
-  brandCandidates: string[];   // [] if not visible; ["Ralph Lauren","Polo"] if visible
-  // Visual attributes — hard matching factors
-  primaryColor: string;        // "navy blau" | "schwarz" | "weiß" — precise, in German
+  category: string;            // Shirt | Jacke | Schuhe | Hose | Hoodie | Uhr | Tasche | ...
+  brand: string;               // primary brand if visible, "" if not
+  brandCandidates: string[];   // all plausible brands from any logo/label/text
+  // Colors
+  primaryColor: string;        // precise German: "navy blau" | "schwarz" | "dunkelgrün" | ...
   secondaryColors: string[];   // ["rot","weiß"]
+  // Construction
   material: string;            // "Baumwolle" | "Leder" | "Nylon" | ""
-  cut: string;                 // "Regular Fit" | "Slim Fit" | "Oversized" | ""
-  fit: string;                 // "slim" | "regular" | "oversized" | ""
   pattern: string;             // "einfarbig" | "gestreift" | "kariert" | ""
-  visibleLogo: string;         // "Polo-Reiter" | "Swoosh" | "3 Streifen" | ""
+  fit: string;                 // "Regular Fit" | "Slim Fit" | "Oversized" | ""
+  sleeveLength: string;        // "kurz" | "lang" | "ärmellos" | "3/4" | ""
+  neckline: string;            // "Rundhals" | "V-Ausschnitt" | "Polo-Kragen" | "Rollkragen" | ""
+  hood: boolean;               // true if hoodie / has a hood
+  zipper: boolean;             // true if a zipper is visible
+  pockets: string;             // "2 Seitentaschen" | "Brusttasche" | ""
+  // Branding
+  logoPosition: string;        // "linke Brust" | "Rücken" | "Ärmel" | "" (empty = no logo)
   logoColor: string;           // "rot" | "weiß" | ""
-  distinctiveDetails: string;  // free-text, e.g. "kleines Emblem auf Brust, Kragen gerippt"
+  // Free-text
+  distinctiveFeatures: string; // e.g. "Gooseneck-Tasche, reflektierender Streifen"
+  // Context
   gender: string;              // "Herren" | "Damen" | "Unisex" | ""
-  style: string;               // "casual" | "sport" | "business" | ""
-  // Queries — derived by GPT from the above
-  exactSearchQueries: string[];   // 2–3: brand + color + type + logo/detail
-  similarSearchQueries: string[]; // 1–2: no brand, broader — fallback when exact fails
+};
+
+// A single search query with a human-readable strategy tag for logging.
+export type SearchQuery = { query: string; strategy: string };
+
+// Full debug report returned by /api/debug/vision and logged by the pipeline.
+export type VisionDebugReport = {
+  imageUrl: string;
+  timestamp: string;
+  analysis: ProductAnalysis | null;
+  queries: SearchQuery[];
+  error?: string;
 };
 
 type GPTRefinement = {
@@ -300,37 +318,34 @@ async function textSearch(query: string, apiKey: string): Promise<PricedMatch[]>
 }
 
 // ---------------------------------------------------------------------------
-// GPT Vision — rich structured product analysis for any fashion item
+// GPT Vision — returns structured visual analysis only (no queries)
+// Queries are built algorithmically by buildSearchQueries() below.
 // ---------------------------------------------------------------------------
 
-async function generateSearchQueries(imageUrl: string): Promise<ProductAnalysis | null> {
+const ANALYSIS_EXAMPLE: ProductAnalysis = {
+  productType: "Polo T-Shirt",
+  category: "Shirt",
+  brand: "Ralph Lauren",
+  brandCandidates: ["Ralph Lauren", "Polo"],
+  primaryColor: "navy blau",
+  secondaryColors: ["rot", "weiß"],
+  material: "Baumwolle",
+  pattern: "einfarbig",
+  fit: "Regular Fit",
+  sleeveLength: "kurz",
+  neckline: "Polo-Kragen",
+  hood: false,
+  zipper: false,
+  pockets: "",
+  logoPosition: "linke Brust",
+  logoColor: "rot",
+  distinctiveFeatures: "kleines Polo-Reiter-Emblem, gerippter Kragen und Bündchen",
+  gender: "Herren",
+};
+
+export async function analyzeImageWithGPT(imageUrl: string): Promise<ProductAnalysis | null> {
   const apiKey = getOpenAIKey();
   if (!apiKey) return null;
-
-  const exampleOutput: ProductAnalysis = {
-    productType: "Polo T-Shirt",
-    category: "Shirt",
-    brandCandidates: ["Ralph Lauren", "Polo"],
-    primaryColor: "navy blau",
-    secondaryColors: ["rot", "weiß"],
-    material: "Baumwolle",
-    cut: "Regular Fit",
-    fit: "regular",
-    pattern: "einfarbig",
-    visibleLogo: "Polo-Reiter",
-    logoColor: "rot",
-    distinctiveDetails: "kleines Polo-Reiter-Emblem auf der linken Brust",
-    gender: "Herren",
-    style: "casual",
-    exactSearchQueries: [
-      "Polo Ralph Lauren T-Shirt navy blau Polo-Reiter Herren",
-      "Ralph Lauren Custom Slim Fit T-Shirt navy",
-    ],
-    similarSearchQueries: [
-      "navy Herren T-Shirt Polo-Logo Baumwolle",
-      "marineblaues Herren T-Shirt kleines Logo",
-    ],
-  };
 
   try {
     const response = await fetch(OPENAI_ENDPOINT, {
@@ -341,7 +356,7 @@ async function generateSearchQueries(imageUrl: string): Promise<ProductAnalysis 
       },
       body: JSON.stringify({
         model: "gpt-4o-mini",
-        max_tokens: 700,
+        max_tokens: 600,
         response_format: { type: "json_object" },
         messages: [
           {
@@ -351,18 +366,25 @@ async function generateSearchQueries(imageUrl: string): Promise<ProductAnalysis 
               {
                 type: "text",
                 text: [
-                  `Analyze this fashion product image and return a JSON object with exactly these fields: ${JSON.stringify(Object.keys(exampleOutput))}`,
+                  `Analyze this fashion product image. Return JSON with exactly these fields: ${Object.keys(ANALYSIS_EXAMPLE).join(", ")}`,
                   "",
-                  `Example output: ${JSON.stringify(exampleOutput)}`,
+                  `Example: ${JSON.stringify(ANALYSIS_EXAMPLE)}`,
                   "",
-                  "Field rules:",
-                  "- productType: specific German name (e.g. 'Crewneck T-Shirt', 'Daunenjacke', 'Laufschuhe', 'Jogginghose', 'Snapback Cap')",
-                  "- category: one of: Shirt | Jacke | Schuhe | Hose | Hoodie | Uhr | Tasche | Gürtel | Brille | Kleid | Cap | Produkt",
-                  "- brandCandidates: [] if brand not visible; list all plausible brands from any visible logo/text/label",
-                  "- primaryColor: PRECISE color in German — never just 'blau', say 'navy blau', 'hellblau', 'royalblau', 'dunkelblau'",
-                  "- exactSearchQueries: 2–3 queries for Google Shopping Germany. Each MUST include: color + productType. Include brand if visible. Include logo/detail if distinctive. These are used verbatim as search queries.",
-                  "- similarSearchQueries: 1–2 broader queries WITHOUT brand — for when exact queries return too few results",
-                  "- If no fashion product visible: return productType='', exactSearchQueries=[], similarSearchQueries=[]",
+                  "Rules per field:",
+                  "- productType: specific German name ('Crewneck T-Shirt' not 'T-Shirt'; 'Daunenjacke' not 'Jacke'; 'Laufschuhe' not 'Schuhe')",
+                  "- category: one of Shirt | Jacke | Schuhe | Hose | Hoodie | Uhr | Tasche | Gürtel | Brille | Kleid | Cap | Produkt",
+                  "- brand: exact brand name if visible ('Ralph Lauren', 'CP Company', 'Nike'), '' if not visible",
+                  "- brandCandidates: all plausible brands from any logo/label/text; [] if none visible",
+                  "- primaryColor: PRECISE German color — never just 'blau', say 'navy blau' | 'hellblau' | 'royalblau' | 'dunkelblau' | 'cobalt blau' etc.",
+                  "- sleeveLength: 'kurz' | 'lang' | 'ärmellos' | '3/4' | '' (only for tops/shirts)",
+                  "- neckline: 'Rundhals' | 'V-Ausschnitt' | 'Polo-Kragen' | 'Rollkragen' | 'Kapuze' | '' (only for tops)",
+                  "- hood: true if garment has a visible hood, false otherwise",
+                  "- zipper: true if a zipper is visible on the garment, false otherwise",
+                  "- pockets: describe visible pockets ('2 Seitentaschen', 'Brusttasche', '') or ''",
+                  "- logoPosition: where the brand logo appears ('linke Brust', 'Rücken', 'Ärmel', 'Schuh-Seite'), '' if no logo",
+                  "- distinctiveFeatures: comma-separated list of unique visual details that distinguish this exact product",
+                  "- gender: 'Herren' | 'Damen' | 'Unisex' | ''",
+                  "- If no fashion product is visible: set productType='' and all string fields='' and arrays=[]",
                 ].join("\n"),
               },
             ],
@@ -372,7 +394,7 @@ async function generateSearchQueries(imageUrl: string): Promise<ProductAnalysis 
     });
 
     if (!response.ok) {
-      console.error(`[generateSearchQueries] OpenAI HTTP ${response.status}`);
+      console.error(`[analyzeImageWithGPT] OpenAI HTTP ${response.status}`);
       return null;
     }
     const data = (await response.json()) as {
@@ -382,21 +404,104 @@ async function generateSearchQueries(imageUrl: string): Promise<ProductAnalysis 
     if (!content) return null;
 
     const parsed = JSON.parse(content) as ProductAnalysis;
-    if (!parsed.productType || !parsed.primaryColor || !parsed.exactSearchQueries?.length) {
-      console.warn("[generateSearchQueries] Incomplete GPT response:", parsed);
+    if (!parsed.productType || !parsed.primaryColor) {
+      console.warn("[analyzeImageWithGPT] Incomplete response:", parsed);
       return null;
     }
 
-    console.log(
-      `[generateSearchQueries] type="${parsed.productType}" color="${parsed.primaryColor}" brands=[${parsed.brandCandidates?.join(", ")}] logo="${parsed.visibleLogo}"`,
-    );
-    console.log(`[generateSearchQueries] exact: ${JSON.stringify(parsed.exactSearchQueries)}`);
-    console.log(`[generateSearchQueries] similar: ${JSON.stringify(parsed.similarSearchQueries)}`);
+    console.log("[analyzeImageWithGPT] Vision output:");
+    console.log(`  productType="${parsed.productType}" category="${parsed.category}"`);
+    console.log(`  brand="${parsed.brand}" brandCandidates=[${parsed.brandCandidates?.join(", ")}]`);
+    console.log(`  primaryColor="${parsed.primaryColor}" secondaryColors=[${parsed.secondaryColors?.join(", ")}]`);
+    console.log(`  material="${parsed.material}" pattern="${parsed.pattern}" fit="${parsed.fit}"`);
+    console.log(`  sleeveLength="${parsed.sleeveLength}" neckline="${parsed.neckline}" hood=${parsed.hood} zipper=${parsed.zipper}`);
+    console.log(`  pockets="${parsed.pockets}" logoPosition="${parsed.logoPosition}" logoColor="${parsed.logoColor}"`);
+    console.log(`  gender="${parsed.gender}" distinctiveFeatures="${parsed.distinctiveFeatures}"`);
+
     return parsed;
   } catch (err) {
-    console.error("[generateSearchQueries] Fehler:", err);
+    console.error("[analyzeImageWithGPT] Fehler:", err);
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Query builder — generates 5–10 diverse Shopping queries from structured analysis.
+// Each query targets a different search angle so they return different result sets.
+// No brand names or product names hardcoded here — everything comes from `a`.
+// ---------------------------------------------------------------------------
+
+export function buildSearchQueries(a: ProductAnalysis): SearchQuery[] {
+  const seen = new Set<string>();
+  const list: SearchQuery[] = [];
+
+  const add = (raw: string, strategy: string) => {
+    const q = raw.trim().replace(/\s+/g, " ");
+    if (q.length > 5 && !seen.has(q.toLowerCase())) {
+      seen.add(q.toLowerCase());
+      list.push({ query: q, strategy });
+    }
+  };
+
+  // Join only non-empty string parts
+  const j = (...parts: unknown[]): string =>
+    (parts as (string | boolean | undefined | null)[])
+      .filter((p): p is string => typeof p === "string" && p.trim().length > 0)
+      .join(" ");
+
+  const brand = a.brand || a.brandCandidates?.[0] || "";
+  const hoodStr = a.hood ? "mit Kapuze" : "";
+  const zipperStr = a.zipper ? "mit Reißverschluss" : "";
+
+  // ── Brand queries (precision) ────────────────────────────────────────────────
+  if (brand) {
+    // most specific
+    add(j(brand, a.primaryColor, a.productType, a.material || a.fit), "brand+color+type+material");
+    // standard
+    add(j(brand, a.primaryColor, a.productType), "brand+color+type");
+    // garment details (fit/sleeve/neckline)
+    if (a.fit || a.sleeveLength || a.neckline) {
+      add(j(brand, a.productType, a.fit, a.sleeveLength, a.neckline, a.primaryColor), "brand+type+details");
+    }
+    // logo-based (when logo position is known)
+    if (a.logoPosition) {
+      add(j(brand, a.productType, a.logoColor, "Logo", a.logoPosition), "brand+logo");
+    }
+    // construction features (hood/zipper)
+    if (hoodStr || zipperStr) {
+      add(j(brand, a.primaryColor, a.productType, hoodStr || zipperStr), "brand+construction");
+    }
+    // alternative brand candidate
+    if (a.brandCandidates.length > 1) {
+      add(j(a.brandCandidates[1], a.primaryColor, a.productType), `altbrand:${a.brandCandidates[1]}`);
+    }
+  }
+
+  // ── No-brand queries (recall) ────────────────────────────────────────────────
+  add(j(a.primaryColor, a.productType, a.fit, a.gender), "color+type+fit+gender");
+  add(j(a.primaryColor, a.productType, a.gender), "color+type+gender");
+
+  if (a.pattern && a.pattern.toLowerCase() !== "einfarbig") {
+    add(j(a.primaryColor, a.pattern, a.productType, a.gender), "color+pattern+type");
+  }
+  if (a.material) {
+    add(j(a.material, a.primaryColor, a.productType, a.gender), "material+color+type");
+  }
+  if (a.sleeveLength || a.neckline) {
+    add(j(a.primaryColor, a.sleeveLength, a.neckline, a.productType), "color+details+type");
+  }
+  if (a.distinctiveFeatures) {
+    const firstFeature = a.distinctiveFeatures.split(/[,;]/)[0]?.trim();
+    if (firstFeature) add(j(a.primaryColor, a.productType, firstFeature), "color+type+feature");
+  }
+
+  // Minimum fallback
+  if (list.length === 0) {
+    add(j(a.primaryColor, a.productType), "fallback:color+type");
+    if (a.productType) add(a.productType, "fallback:type-only");
+  }
+
+  return list.slice(0, 10);
 }
 
 // ---------------------------------------------------------------------------
@@ -462,7 +567,7 @@ export async function searchWithGoogleLens(
 
     const [lensRespRaw, productAnalysis] = await Promise.all([
       fetch(lensUrl.toString()),
-      generateSearchQueries(imageUrl),
+      analyzeImageWithGPT(imageUrl),
     ]);
 
     let lensMatches: LensVisualMatch[] = [];
@@ -482,9 +587,6 @@ export async function searchWithGoogleLens(
     console.log(
       `[Stage 0] Lens: ${lensMatches.length} total, ${lensPriced.length} priced, ${lensEU.length} EU-eligible`,
     );
-    console.log(
-      `[Stage 0] GPT: type="${productAnalysis?.productType ?? "n/a"}" color="${productAnalysis?.primaryColor ?? "n/a"}" brands=[${productAnalysis?.brandCandidates?.join(",") ?? "n/a"}]`,
-    );
     lensPriced.forEach((m, i) => {
       const reason = euRejectReason(m);
       console.log(
@@ -492,23 +594,32 @@ export async function searchWithGoogleLens(
       );
     });
 
+    // Build all search queries from the structured vision analysis.
+    const allQueries: SearchQuery[] = productAnalysis ? buildSearchQueries(productAnalysis) : [];
+    const brandQueries = allQueries.filter(
+      (q) => q.strategy.startsWith("brand") || q.strategy.startsWith("altbrand"),
+    );
+    const nobrandQueries = allQueries.filter(
+      (q) => !q.strategy.startsWith("brand") && !q.strategy.startsWith("altbrand"),
+    );
+
+    // Full query log — the main observability instrument.
+    console.log(`[Stage 0] Vision → ${allQueries.length} queries (${brandQueries.length} brand, ${nobrandQueries.length} no-brand):`);
+    allQueries.forEach((q, i) =>
+      console.log(`  Q[${i}] [${q.strategy}] "${q.query}"`),
+    );
+
     let allEU: PricedMatch[] = [...lensEU];
     let hadAnyPricedResults = lensPriced.length > 0;
 
     // -----------------------------------------------------------------------
-    // Stage 1: PRIMARY — general Shopping query + parallel site-specific queries
-    // for the top EU fashion shops. All run in one Promise.all batch so total
-    // latency is max(slowest single request) rather than sequential.
-    // Lens remains a supplementary pool only.
+    // Stage 1: brand queries + site-specific variants (all parallel).
     // -----------------------------------------------------------------------
-    if (productAnalysis?.exactSearchQueries?.length) {
-      // Use first exact query as the base for site-specific searches.
-      // All exact queries + site-specific variants run in one parallel batch.
-      const baseQuery = productAnalysis.exactSearchQueries[0];
-
+    if (brandQueries.length > 0) {
+      const baseQuery = brandQueries[0].query;
       const stage1Queries: string[] = [
-        ...productAnalysis.exactSearchQueries,          // all exact queries (2–3)
-        ...PRIORITY_SHOP_SITES.map((site) => `${baseQuery} site:${site}`), // + site-specific
+        ...brandQueries.map((q) => q.query),
+        ...PRIORITY_SHOP_SITES.map((site) => `${baseQuery} site:${site}`),
       ];
 
       console.log(`[Stage 1] Firing ${stage1Queries.length} parallel Shopping searches`);
@@ -540,20 +651,21 @@ export async function searchWithGoogleLens(
     }
 
     // -----------------------------------------------------------------------
-    // Stage 2: FALLBACK — broader/brand-agnostic queries OR top Lens titles.
+    // Stage 2: no-brand queries (higher recall) OR top Lens titles as last resort.
     // -----------------------------------------------------------------------
-    const fallbackQueries: string[] =
-      productAnalysis?.similarSearchQueries?.filter(Boolean) ??
-      [...lensPriced]
-        .sort((a, b) => shopScore(b) - shopScore(a))
-        .slice(0, 3)
-        .map((m) => m.title.trim())
-        .filter(Boolean);
+    const stage2QueryStrings: string[] = nobrandQueries.length > 0
+      ? nobrandQueries.map((q) => q.query)
+      : [...lensPriced]
+          .sort((a, b) => shopScore(b) - shopScore(a))
+          .slice(0, 3)
+          .map((m) => m.title.trim())
+          .filter(Boolean);
 
-    if (fallbackQueries.length > 0) {
-      console.log(`[Stage 2] Fallback queries:`, fallbackQueries);
+    if (stage2QueryStrings.length > 0) {
+      console.log(`[Stage 2] Fallback queries (${stage2QueryStrings.length}):`);
+      stage2QueryStrings.forEach((q, i) => console.log(`  S2[${i}] "${q}"`));
       const fallbackResults = await Promise.all(
-        fallbackQueries.slice(0, 3).map((q) => textSearch(q, apiKey)),
+        stage2QueryStrings.slice(0, 5).map((q) => textSearch(q, apiKey)),
       );
       const fallbackAll = fallbackResults.flat();
       const fallbackEU = fallbackAll.filter(isEUEligible);
@@ -671,22 +783,25 @@ async function refineWithOpenAI(
   const colorContext = productAnalysis
     ? [
         `PRODUCT IN PHOTO: ${productAnalysis.primaryColor} ${productAnalysis.productType}.`,
-        productAnalysis.brandCandidates?.length
-          ? `Brand (visible in photo): ${productAnalysis.brandCandidates.join(" / ")}.`
-          : "Brand: not visible or unknown.",
-        productAnalysis.visibleLogo
-          ? `Logo/detail: ${productAnalysis.visibleLogo} (${productAnalysis.logoColor || "color unknown"}).`
+        (productAnalysis.brand || productAnalysis.brandCandidates?.length)
+          ? `Brand: ${productAnalysis.brand || productAnalysis.brandCandidates.join(" / ")}.`
+          : "Brand: not visible.",
+        productAnalysis.logoPosition
+          ? `Logo: ${productAnalysis.logoColor || ""} logo at ${productAnalysis.logoPosition}.`
           : "",
-        productAnalysis.distinctiveDetails
-          ? `Distinctive features: ${productAnalysis.distinctiveDetails}.`
+        productAnalysis.fit ? `Fit: ${productAnalysis.fit}.` : "",
+        productAnalysis.sleeveLength ? `Sleeve: ${productAnalysis.sleeveLength}.` : "",
+        productAnalysis.neckline ? `Neckline: ${productAnalysis.neckline}.` : "",
+        productAnalysis.distinctiveFeatures
+          ? `Distinctive: ${productAnalysis.distinctiveFeatures}.`
           : "",
         `Gender: ${productAnalysis.gender || "not specified"}.`,
-        `HARD MATCHING CONSTRAINTS — originalIndex MUST satisfy ALL of:`,
-        `  1. Color = "${productAnalysis.primaryColor}" (any other color → score ≤55 → rejected)`,
+        `HARD CONSTRAINTS — originalIndex MUST satisfy:`,
+        `  1. Color = "${productAnalysis.primaryColor}" (wrong color → score ≤55 → rejected)`,
         `  2. Type = "${productAnalysis.productType}" (wrong type → score ≤55 → rejected)`,
-        productAnalysis.brandCandidates?.length
-          ? `  3. Brand = one of [${productAnalysis.brandCandidates.join(", ")}] (wrong/absent brand → −35 pts)`
-          : `  3. Brand not required (not visible in photo)`,
+        (productAnalysis.brand || productAnalysis.brandCandidates?.length)
+          ? `  3. Brand = ${productAnalysis.brand || productAnalysis.brandCandidates.join(" or ")} (wrong brand → −35 pts)`
+          : `  3. Brand: not required (not visible in photo)`,
       ].filter(Boolean).join(" ")
     : "Match by COLOR first (wrong color = wrong product), then product type, then brand.";
 
@@ -804,7 +919,7 @@ async function refineWithOpenAI(
       priced.find((m) => m.image ?? m.thumbnail)?.image ??
       priced.find((m) => m.thumbnail)?.thumbnail;
     const bestImg = (m: PricedMatch) => m.image ?? m.thumbnail ?? anyThumb;
-    const brand = gpt.brand?.trim() || productAnalysis?.brandCandidates?.[0] || guessBrand(original.title);
+    const brand = gpt.brand?.trim() || productAnalysis?.brand || productAnalysis?.brandCandidates?.[0] || guessBrand(original.title);
     const category = gpt.category?.trim() || guessCategory(original.title);
 
     const toAlt = (match: PricedMatch, role: AlternativeProduct["role"]): AlternativeProduct => ({
