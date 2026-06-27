@@ -201,6 +201,7 @@ type ProductAnalysis = {
 };
 
 type GPTRefinement = {
+  scores: number[];     // one score per candidate (0–100), same order as input
   originalIndex: number;
   bestIndex: number;
   cheapestIndex: number;
@@ -595,7 +596,7 @@ async function refineWithOpenAI(
       },
       body: JSON.stringify({
         model: "gpt-4o-mini",
-        max_tokens: 350,
+        max_tokens: 600,
         response_format: { type: "json_object" },
         messages: [
           {
@@ -605,19 +606,31 @@ async function refineWithOpenAI(
               {
                 type: "text",
                 text: [
-                  `${colorContext}`,
-                  `EU shop candidates (pre-sorted by quality, all ship to Germany): ${JSON.stringify(matchList)}`,
+                  colorContext,
                   "",
-                  'Return JSON: {"originalIndex":0,"bestIndex":1,"cheapestIndex":2,"premiumIndex":3,"productName":"Polo Ralph Lauren Navy T-Shirt","brand":"Ralph Lauren","category":"Shirt","confidence":87,"matchQuality":"exact"}',
+                  `EU shop candidates (all ship to Germany): ${JSON.stringify(matchList)}`,
                   "",
-                  "Rules:",
-                  "- originalIndex: closest visual match. COLOR IS A HARD CONSTRAINT — a navy shirt must NOT map to a beige or white shirt. If no color match exists, pick the closest and set matchQuality='similar'.",
-                  "- bestIndex: best value from a German/brand shop (Zalando, About You, Breuninger, ralphlauren.com/de preferred)",
-                  "- cheapestIndex: lowest EUR price (must differ from original and best)",
-                  "- premiumIndex: premium option — Farfetch, Mytheresa, SSENSE, Mr Porter preferred (must differ from all others)",
-                  "- All four indices MUST be different",
-                  "- matchQuality: 'exact' = same color + product type + brand; 'similar' = correct brand/type but different color or close variant; 'uncertain' = rough match only",
-                  "- productName: clean brand + color + product name, no store info",
+                  "STEP 1 — Score each candidate 0–100 using this rubric:",
+                  "  +35 pts: brand matches the photo",
+                  "  +35 pts: color matches exactly (navy ≠ white, navy ≠ beige, navy ≠ grey)",
+                  "  +20 pts: product type matches exactly (T-Shirt ≠ Polo Shirt ≠ Hoodie)",
+                  "  +10 pts: logo / distinctive detail matches",
+                  "  Max 100. Wrong brand OR wrong color → score ≤65 (below threshold).",
+                  "",
+                  "STEP 2 — Pick indices (all must be different):",
+                  "  originalIndex: highest-scored candidate",
+                  "  bestIndex: best EU/German shop (Zalando, About You, Breuninger, brand .de preferred)",
+                  "  cheapestIndex: lowest EUR price",
+                  "  premiumIndex: premium shop (Farfetch, Mytheresa, Mr Porter, SSENSE preferred)",
+                  "",
+                  "STEP 3 — Set matchQuality from scores[originalIndex]:",
+                  "  ≥90 → 'exact'   |   70–89 → 'similar'   |   <70 → 'uncertain'",
+                  "",
+                  'Return JSON: {"scores":[85,92,61,78],"originalIndex":1,"bestIndex":0,"cheapestIndex":2,"premiumIndex":3,"productName":"Polo Ralph Lauren Navy T-Shirt","brand":"Ralph Lauren","category":"Shirt","confidence":88,"matchQuality":"exact"}',
+                  "",
+                  "Other rules:",
+                  "- scores array: one integer per candidate, same order as input",
+                  "- productName: brand + color + product name only (no store)",
                   "- category: Schuhe | Hoodie | Shirt | Jacke | Hose | Uhr | Tasche | Gürtel | Brille | Kleid | Produkt",
                   "- confidence: 50–95",
                 ].join("\n"),
@@ -651,6 +664,32 @@ async function refineWithOpenAI(
       return null;
     }
 
+    // Score-based match quality — the core of the ranking engine.
+    const scores: number[] = Array.isArray(gpt.scores) ? gpt.scores : [];
+    const originalScore = typeof scores[gpt.originalIndex] === "number"
+      ? scores[gpt.originalIndex]
+      : (gpt.matchQuality === "exact" ? 92 : gpt.matchQuality === "similar" ? 75 : 55);
+
+    console.log(
+      `[refineWithOpenAI] scores: ${scores.slice(0, 8).map((s, i) => `[${i}]=${s}`).join(" ")}`,
+    );
+    console.log(
+      `[refineWithOpenAI] originalIndex=${gpt.originalIndex} score=${originalScore}`,
+    );
+
+    // <60 means even the best candidate doesn't match the photo (wrong brand or wrong color).
+    if (originalScore < 60) {
+      console.warn(
+        `[refineWithOpenAI] Best score=${originalScore} < 60 — candidates don't match photo → null`,
+      );
+      return null;
+    }
+
+    const matchQuality: MatchQuality =
+      originalScore >= 90 ? "exact" :
+      originalScore >= 70 ? "similar" :
+      "uncertain";
+
     const original = priced[gpt.originalIndex];
     const best = priced[gpt.bestIndex];
     const cheapest = priced[gpt.cheapestIndex];
@@ -662,10 +701,6 @@ async function refineWithOpenAI(
     const bestImg = (m: PricedMatch) => m.image ?? m.thumbnail ?? anyThumb;
     const brand = gpt.brand?.trim() || productAnalysis?.brand || guessBrand(original.title);
     const category = gpt.category?.trim() || guessCategory(original.title);
-    const matchQuality: MatchQuality =
-      gpt.matchQuality === "exact" || gpt.matchQuality === "similar" || gpt.matchQuality === "uncertain"
-        ? gpt.matchQuality
-        : "uncertain";
 
     const toAlt = (match: PricedMatch, role: AlternativeProduct["role"]): AlternativeProduct => ({
       role,
@@ -682,7 +717,7 @@ async function refineWithOpenAI(
     });
 
     console.log(
-      `[refineWithOpenAI] matchQuality="${matchQuality}" | original="${original.title.slice(0, 40)}" | best="${best.source}"`,
+      `[refineWithOpenAI] matchQuality="${matchQuality}" score=${originalScore} | "${original.title.slice(0, 40)}" @ ${original.source}`,
     );
 
     return {
