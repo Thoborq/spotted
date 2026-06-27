@@ -11,6 +11,71 @@ import ProductThumb from "@/components/ui/ProductThumb";
 import { getAnalysisById, type StoredAlternative, type StoredAnalysis } from "@/lib/analysis-store";
 import { formatPrice } from "@/lib/format";
 
+// ---------------------------------------------------------------------------
+// CardLink — makes the entire card clickable, opens a real product URL.
+//
+// Uses window.open (explicit, reliable in iOS Safari + PWA standalone mode).
+// e.preventDefault() stops the native <a> navigation so window.open is the
+// sole navigation path — avoids double-tab on desktop and in-app redirect on
+// iOS PWA.
+//
+// When url is undefined/empty: renders a disabled, non-clickable card with
+// a "Nicht verfügbar" notice instead of pretending it's clickable.
+// ---------------------------------------------------------------------------
+function CardLink({
+  url,
+  debugTitle,
+  debugShop,
+  children,
+  className = "",
+}: {
+  url: string | undefined | null;
+  debugTitle: string;
+  debugShop: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  const clean = url && url.trim() !== "" && url !== "#" ? url.trim() : undefined;
+
+  if (!clean) {
+    console.log(
+      `[ProductCard] title="${debugTitle}" shop="${debugShop}" url="(none)" clicked=no`,
+    );
+    return (
+      <div className={`relative select-none ${className}`}>
+        <div className="opacity-50">{children}</div>
+        <div className="absolute bottom-3 right-3">
+          <span className="rounded-full bg-foreground-tertiary/10 px-2 py-0.5 text-[10.5px] font-medium text-foreground-tertiary">
+            Nicht verfügbar
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <a
+      href={clean}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={`block ${className}`}
+      onClick={(e) => {
+        e.preventDefault();
+        console.log(
+          `[ProductCard] title="${debugTitle}" shop="${debugShop}" url="${clean}" clicked=yes`,
+        );
+        window.open(clean, "_blank", "noopener,noreferrer");
+      }}
+    >
+      {children}
+    </a>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Page component
+// ---------------------------------------------------------------------------
+
 const roleMeta: Record<StoredAlternative["role"], { label: string; icon: typeof Star }> = {
   best: { label: "Beste Alternative", icon: Star },
   cheapest: { label: "Günstigste Alternative", icon: Tag },
@@ -33,9 +98,7 @@ export default function AnalyseClient({ id }: { id: string }) {
   if (analysis === null) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 px-10 text-center">
-        <p className="font-serif text-[20px] font-medium">
-          Analyse nicht gefunden.
-        </p>
+        <p className="font-serif text-[20px] font-medium">Analyse nicht gefunden.</p>
         <Button href="/shot" variant="primary" size="md">
           Neu scannen
         </Button>
@@ -49,24 +112,6 @@ export default function AnalyseClient({ id }: { id: string }) {
     .map((role) => alternatives.find((alt) => alt.role === role))
     .filter((alt): alt is StoredAlternative => Boolean(alt));
 
-  const originalCard = (
-    <Card className="mt-2.5 flex items-center gap-4 p-4">
-      <ProductThumb icon={analysis.icon} tone={analysis.tone} size="md" src={analysis.imageUrl} />
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-[15px] font-semibold">{original.store}</p>
-        <p className="text-[16px] font-bold tracking-tight">
-          {formatPrice(original.price)}
-        </p>
-      </div>
-      {original.link && (
-        <span className="flex shrink-0 items-center gap-1 text-[13px] font-medium text-foreground-secondary">
-          <ExternalLink size={14} />
-          Shop
-        </span>
-      )}
-    </Card>
-  );
-
   return (
     <div className="flex min-h-screen flex-col safe-top">
       <header className="flex items-center gap-3 px-4 pt-4">
@@ -77,6 +122,7 @@ export default function AnalyseClient({ id }: { id: string }) {
       </header>
 
       <div className="flex-1 px-5 pb-32 pt-5">
+        {/* ---- Product hero ---- */}
         <div className="relative">
           <ProductThumb icon={analysis.icon} tone={analysis.tone} size="xl" src={analysis.imageUrl} />
           <div className="absolute right-3 top-3">
@@ -99,6 +145,7 @@ export default function AnalyseClient({ id }: { id: string }) {
           </p>
         </div>
 
+        {/* ---- Original / Ähnliches Produkt ---- */}
         <h3 className="mt-7 px-0.5 text-[13px] font-semibold uppercase tracking-wide text-foreground-tertiary">
           {isExact ? "Original" : "Ähnliches Produkt"}
         </h3>
@@ -108,17 +155,35 @@ export default function AnalyseClient({ id }: { id: string }) {
           </p>
         )}
 
-        {original.link ? (
-          <a
-            href={original.link}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="block"
-          >
-            {originalCard}
-          </a>
-        ) : originalCard}
+        <CardLink
+          url={original.link}
+          debugTitle={name}
+          debugShop={original.store}
+          className="mt-2.5"
+        >
+          <Card className="flex items-center gap-4 p-4">
+            <ProductThumb
+              icon={analysis.icon}
+              tone={analysis.tone}
+              size="md"
+              src={analysis.imageUrl}
+            />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[15px] font-semibold">{original.store}</p>
+              <p className="text-[16px] font-bold tracking-tight">
+                {formatPrice(original.price)}
+              </p>
+            </div>
+            {original.link && (
+              <span className="flex shrink-0 items-center gap-1 text-[13px] font-medium text-foreground-secondary">
+                <ExternalLink size={14} />
+                Shop
+              </span>
+            )}
+          </Card>
+        </CardLink>
 
+        {/* ---- Alternativen ---- */}
         <div className="mt-7 flex items-center justify-between px-0.5">
           <h3 className="text-[13px] font-semibold uppercase tracking-wide text-foreground-tertiary">
             Alternativen
@@ -132,56 +197,53 @@ export default function AnalyseClient({ id }: { id: string }) {
           {sortedAlternatives.map((alt) => {
             const meta = roleMeta[alt.role];
             const RoleIcon = meta.icon;
-            const cardContent = (
-              <Card
-                className={
-                  alt.role === "best"
-                    ? "border-accent-strong/40 bg-accent-soft/30 p-4"
-                    : "p-4"
-                }
-              >
-                <div className="mb-3 inline-flex items-center gap-1.5 text-[11.5px] font-semibold uppercase tracking-wide text-accent-strong">
-                  <RoleIcon size={13} strokeWidth={2} />
-                  {meta.label}
-                  {alt.link && <ExternalLink size={11} className="ml-0.5 opacity-50" />}
-                </div>
-                <div className="flex items-center gap-4">
-                  <ProductThumb icon={analysis.icon} tone={alt.role === "best" ? analysis.tone : (analysis.tone + 2)} size="md" src={alt.imageUrl} />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-[14px] font-semibold">{alt.name}</p>
-                    <p className="truncate text-[13px] text-foreground-secondary">
-                      {alt.store}
-                    </p>
-                    {alt.shipsFromNonEU && (
-                      <p className="mt-0.5 text-[11px] text-foreground-tertiary">
-                        Versand ggf. aus Nicht-EU
-                      </p>
-                    )}
-                  </div>
-                  <div className="text-right">
-                    <p className="text-[15px] font-bold tracking-tight">
-                      {formatPrice(alt.price)}
-                    </p>
-                    <p className="text-[11.5px] font-medium text-save">
-                      spart {alt.savingsPercent}%
-                    </p>
-                  </div>
-                </div>
-              </Card>
-            );
 
-            return alt.link ? (
-              <a
+            return (
+              <CardLink
                 key={alt.role}
-                href={alt.link}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="block"
+                url={alt.link}
+                debugTitle={alt.name}
+                debugShop={alt.store}
               >
-                {cardContent}
-              </a>
-            ) : (
-              <div key={alt.role}>{cardContent}</div>
+                <Card
+                  className={
+                    alt.role === "best"
+                      ? "border-accent-strong/40 bg-accent-soft/30 p-4"
+                      : "p-4"
+                  }
+                >
+                  <div className="mb-3 inline-flex items-center gap-1.5 text-[11.5px] font-semibold uppercase tracking-wide text-accent-strong">
+                    <RoleIcon size={13} strokeWidth={2} />
+                    {meta.label}
+                    {alt.link && <ExternalLink size={11} className="ml-0.5 opacity-50" />}
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <ProductThumb
+                      icon={analysis.icon}
+                      tone={alt.role === "best" ? analysis.tone : analysis.tone + 2}
+                      size="md"
+                      src={alt.imageUrl}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[14px] font-semibold">{alt.name}</p>
+                      <p className="truncate text-[13px] text-foreground-secondary">{alt.store}</p>
+                      {alt.shipsFromNonEU && (
+                        <p className="mt-0.5 text-[11px] text-foreground-tertiary">
+                          Versand ggf. aus Nicht-EU
+                        </p>
+                      )}
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[15px] font-bold tracking-tight">
+                        {formatPrice(alt.price)}
+                      </p>
+                      <p className="text-[11.5px] font-medium text-save">
+                        spart {alt.savingsPercent}%
+                      </p>
+                    </div>
+                  </div>
+                </Card>
+              </CardLink>
             );
           })}
         </div>
