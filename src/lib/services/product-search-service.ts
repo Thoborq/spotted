@@ -4,7 +4,8 @@ import type { UploadedImage } from "../upload";
 
 const SERPAPI_ENDPOINT = "https://serpapi.com/search.json";
 const OPENAI_ENDPOINT = "https://api.openai.com/v1/chat/completions";
-const MIN_EU_MATCHES = 4;
+const MIN_EU_MATCHES = 2;   // minimum pool size to attempt finalizeResult
+const MIN_FOR_GPT = 4;      // GPT needs 4 candidates to assign 4 distinct roles
 const MAX_GPT_MATCHES = 12;
 const GPT_TIMEOUT_MS = 9000;
 
@@ -59,6 +60,15 @@ const EXCLUDED_SHOP_SOURCES = [
   "ebay.com", "amazon.com",
 ];
 
+// These shops ship reliably to Germany/EU regardless of display currency.
+// Farfetch = GBP, SSENSE = USD, Mr Porter = GBP — all ship to EU, all legit.
+const SHIPS_TO_EU_ALWAYS = [
+  "farfetch", "mytheresa", "ssense",
+  "mr porter", "mrporter", "net-a-porter", "netaporter",
+  "yoox", "luisaviaroma", "luisa via roma",
+  "end.", "end clothing",
+];
+
 const OFFICIAL_BRAND_DOMAINS = [
   "nike", "adidas", "puma", "reebok", "newbalance", "new-balance",
   "converse", "vans", "tommy", "calvinklein", "ralphlauren", "lacoste",
@@ -74,18 +84,22 @@ function isEUEligible(m: PricedMatch): boolean {
   const src = (m.source ?? "").toLowerCase();
   const href = (m.link ?? "").toLowerCase();
 
-  // Explicit non-EUR currency → always reject.
-  if (currency !== "" && currency !== "€") return false;
-
-  // Hard-exclude known non-EU shops.
+  // Hard-exclude non-EU marketplaces and US retailers first.
   if (EXCLUDED_SHOP_SOURCES.some((s) =>
     src.includes(s) || href.includes(s.replace(/ /g, ""))
   )) return false;
 
-  // Explicit EUR → accept.
+  // EUR → always accept.
   if (currency === "€") return true;
 
-  // No currency field — accept only from clearly EU sources.
+  // Non-EUR from shops that reliably ship to EU → accept.
+  // Farfetch/SSENSE/Mr Porter show GBP or USD but ship to Germany fine.
+  if (currency !== "" && SHIPS_TO_EU_ALWAYS.some((s) => src.includes(s))) return true;
+
+  // Any other non-EUR currency → reject (e.g. amazon.co.uk with GBP, US shops).
+  if (currency !== "" && currency !== "€") return false;
+
+  // No currency field — accept from clearly EU sources.
   if (EU_TLD.test(href)) return true;
   if (KNOWN_EU_SHOP_SOURCES.some((s) => src.includes(s))) return true;
   if (OFFICIAL_BRAND_DOMAINS.some((d) =>
@@ -99,13 +113,13 @@ function euRejectReason(m: PricedMatch): string {
   const currency = normalizeCurrency(m.price.currency);
   const src = (m.source ?? "").toLowerCase();
   const href = (m.link ?? "").toLowerCase();
-  if (currency !== "" && currency !== "€") return `currency="${currency}"`;
-  if (EXCLUDED_SHOP_SOURCES.some((s) =>
-    src.includes(s) || href.includes(s.replace(/ /g, ""))
-  )) return "excluded_shop";
-  if (currency === "€") return "passes";
+  if (EXCLUDED_SHOP_SOURCES.some((s) => src.includes(s) || href.includes(s.replace(/ /g, "")))) return "excluded_shop";
+  if (currency === "€") return "passes(eur)";
+  if (currency !== "" && SHIPS_TO_EU_ALWAYS.some((s) => src.includes(s))) return `passes(premium_nonEUR:${currency})`;
+  if (currency !== "" && currency !== "€") return `currency_rejected="${currency}"`;
   if (EU_TLD.test(href)) return "passes(eu_tld)";
   if (KNOWN_EU_SHOP_SOURCES.some((s) => src.includes(s))) return "passes(known_eu)";
+  if (OFFICIAL_BRAND_DOMAINS.some((d) => href.includes(d) && (/\.de\b/.test(href) || /\.com\/(de|eu|at|ch)/.test(href)))) return "passes(brand_eu)";
   return "unknown_no_currency";
 }
 
@@ -789,8 +803,8 @@ async function finalizeResult(
 
   const linked = countLinks(candidate);
   console.log(`[finalizeResult] countLinks=${linked}/4`);
-  if (linked < 2) {
-    console.warn(`[finalizeResult] EXIT: only ${linked}/4 items have product links → null`);
+  if (linked < 1) {
+    console.warn(`[finalizeResult] EXIT: 0 items have product links → null`);
     return null;
   }
 
@@ -809,6 +823,13 @@ async function refineWithOpenAI(
 ): Promise<AnalysisResult | null> {
   const apiKey = getOpenAIKey();
   if (!apiKey) return null;
+
+  // GPT needs to assign 4 distinct role indices. With fewer candidates,
+  // duplicate indices are inevitable — skip GPT and use heuristic instead.
+  if (priced.length < MIN_FOR_GPT) {
+    console.warn(`[refineWithOpenAI] ${priced.length} candidates < ${MIN_FOR_GPT} needed for 4 distinct roles → heuristic`);
+    return null;
+  }
 
   const matchList = priced.map((m, i) => ({
     index: i,
@@ -937,9 +958,11 @@ async function refineWithOpenAI(
     });
     console.log(`[refineWithOpenAI] best candidate: index=${gpt.originalIndex} score=${originalScore} → "${priced[gpt.originalIndex]?.title.slice(0, 50) ?? "?"}"`);
 
-    // <60 means even the best candidate doesn't match the photo (wrong brand or wrong color).
-    if (originalScore < 60) {
-      console.warn(`[refineWithOpenAI] EXIT: score=${originalScore} < 60 threshold → all candidates rejected → null`);
+    // <40 = totally wrong product (wrong type AND wrong color). Above 40 we show
+    // with matchQuality="uncertain". The hard cap at 55 for wrong color/type means
+    // those items still show but never as "exact" or "similar".
+    if (originalScore < 40) {
+      console.warn(`[refineWithOpenAI] EXIT: score=${originalScore} < 40 threshold → no usable candidates → null`);
       return null;
     }
 
@@ -1009,13 +1032,14 @@ async function refineWithOpenAI(
 // ---------------------------------------------------------------------------
 
 function buildResultFromPriced(priced: PricedMatch[]): AnalysisResult | null {
-  if (priced.length < MIN_EU_MATCHES) return null;
+  if (priced.length < 1) return null;
 
   const [original, ...rest] = priced;
   const byPrice = [...rest].sort((a, b) => a.price.extracted_value - b.price.extracted_value);
-  const cheapest = byPrice[0];
-  const premium = byPrice[byPrice.length - 1];
-  const best = byPrice[Math.floor(byPrice.length / 2)];
+  // Fill roles with available items, falling back to original when not enough
+  const cheapest = byPrice[0] ?? original;
+  const premium = byPrice[byPrice.length - 1] ?? original;
+  const best = byPrice.length > 1 ? byPrice[Math.floor((byPrice.length - 1) / 2)] : (byPrice[0] ?? original);
   const prices = priced.map((m) => m.price.extracted_value);
   const anyThumb =
     priced.find((m) => m.image ?? m.thumbnail)?.image ??
@@ -1036,6 +1060,15 @@ function buildResultFromPriced(priced: PricedMatch[]): AnalysisResult | null {
     shipsFromNonEU: false,
   });
 
+  // Deduplicate alternatives by link so the UI doesn't show 3 identical cards
+  // when there aren't enough unique results.
+  const usedLinks = new Set<string>();
+  const dedup = (alt: AlternativeProduct): AlternativeProduct => {
+    if (!alt.link || usedLinks.has(alt.link)) return { ...alt, link: undefined };
+    usedLinks.add(alt.link);
+    return alt;
+  };
+
   return {
     originalProduct: {
       name: cleanTitle(original.title),
@@ -1051,9 +1084,9 @@ function buildResultFromPriced(priced: PricedMatch[]): AnalysisResult | null {
     priceRange: { min: Math.min(...prices), max: Math.max(...prices) },
     matchQuality: "uncertain",
     alternatives: {
-      best: toAlt(best, "best"),
-      cheapest: toAlt(cheapest, "cheapest"),
-      premium: toAlt(premium, "premium"),
+      best: dedup(toAlt(best, "best")),
+      cheapest: dedup(toAlt(cheapest, "cheapest")),
+      premium: dedup(toAlt(premium, "premium")),
     },
   };
 }
