@@ -204,11 +204,25 @@ type ShoppingApiResult = {
 };
 
 type ProductAnalysis = {
-  primaryQuery: string;    // e.g. "Polo Ralph Lauren Custom Slim Fit T-Shirt navy red pony"
-  brand: string;           // e.g. "Ralph Lauren"
-  color: string;           // e.g. "navy blau"
-  productType: string;     // e.g. "Polo T-Shirt"
-  fallbackQueries: string[]; // 2–3 simpler variations if primaryQuery yields too few results
+  // Core identification
+  productType: string;         // "Polo T-Shirt" | "Daunenjacke" | "Laufschuhe" | ...
+  category: string;            // maps to UI category: Shirt | Jacke | Schuhe | Hose | ...
+  brandCandidates: string[];   // [] if not visible; ["Ralph Lauren","Polo"] if visible
+  // Visual attributes — hard matching factors
+  primaryColor: string;        // "navy blau" | "schwarz" | "weiß" — precise, in German
+  secondaryColors: string[];   // ["rot","weiß"]
+  material: string;            // "Baumwolle" | "Leder" | "Nylon" | ""
+  cut: string;                 // "Regular Fit" | "Slim Fit" | "Oversized" | ""
+  fit: string;                 // "slim" | "regular" | "oversized" | ""
+  pattern: string;             // "einfarbig" | "gestreift" | "kariert" | ""
+  visibleLogo: string;         // "Polo-Reiter" | "Swoosh" | "3 Streifen" | ""
+  logoColor: string;           // "rot" | "weiß" | ""
+  distinctiveDetails: string;  // free-text, e.g. "kleines Emblem auf Brust, Kragen gerippt"
+  gender: string;              // "Herren" | "Damen" | "Unisex" | ""
+  style: string;               // "casual" | "sport" | "business" | ""
+  // Queries — derived by GPT from the above
+  exactSearchQueries: string[];   // 2–3: brand + color + type + logo/detail
+  similarSearchQueries: string[]; // 1–2: no brand, broader — fallback when exact fails
 };
 
 type GPTRefinement = {
@@ -286,12 +300,37 @@ async function textSearch(query: string, apiKey: string): Promise<PricedMatch[]>
 }
 
 // ---------------------------------------------------------------------------
-// GPT Vision — analyze image → structured product analysis + precise query
+// GPT Vision — rich structured product analysis for any fashion item
 // ---------------------------------------------------------------------------
 
 async function generateSearchQueries(imageUrl: string): Promise<ProductAnalysis | null> {
   const apiKey = getOpenAIKey();
   if (!apiKey) return null;
+
+  const exampleOutput: ProductAnalysis = {
+    productType: "Polo T-Shirt",
+    category: "Shirt",
+    brandCandidates: ["Ralph Lauren", "Polo"],
+    primaryColor: "navy blau",
+    secondaryColors: ["rot", "weiß"],
+    material: "Baumwolle",
+    cut: "Regular Fit",
+    fit: "regular",
+    pattern: "einfarbig",
+    visibleLogo: "Polo-Reiter",
+    logoColor: "rot",
+    distinctiveDetails: "kleines Polo-Reiter-Emblem auf der linken Brust",
+    gender: "Herren",
+    style: "casual",
+    exactSearchQueries: [
+      "Polo Ralph Lauren T-Shirt navy blau Polo-Reiter Herren",
+      "Ralph Lauren Custom Slim Fit T-Shirt navy",
+    ],
+    similarSearchQueries: [
+      "navy Herren T-Shirt Polo-Logo Baumwolle",
+      "marineblaues Herren T-Shirt kleines Logo",
+    ],
+  };
 
   try {
     const response = await fetch(OPENAI_ENDPOINT, {
@@ -302,7 +341,7 @@ async function generateSearchQueries(imageUrl: string): Promise<ProductAnalysis 
       },
       body: JSON.stringify({
         model: "gpt-4o-mini",
-        max_tokens: 500,
+        max_tokens: 700,
         response_format: { type: "json_object" },
         messages: [
           {
@@ -312,16 +351,18 @@ async function generateSearchQueries(imageUrl: string): Promise<ProductAnalysis 
               {
                 type: "text",
                 text: [
-                  "Analyze this product image precisely. Return JSON:",
-                  '{"primaryQuery":"Polo Ralph Lauren Custom Slim Fit T-Shirt navy blau rotes Pony","brand":"Ralph Lauren","color":"navy blau","productType":"Polo T-Shirt","fallbackQueries":["Polo Ralph Lauren navy T-Shirt Herren","Ralph Lauren Polo Shirt blau"]}',
+                  `Analyze this fashion product image and return a JSON object with exactly these fields: ${JSON.stringify(Object.keys(exampleOutput))}`,
                   "",
-                  "Rules:",
-                  "- primaryQuery: ONE precise search query for Google Shopping Germany. Include brand + exact color + product type + distinguishing details (logo type, pattern, cut, material if visible). This is the most important field — make it specific.",
-                  "- brand: exact brand name (e.g. 'Ralph Lauren', 'CP Company', 'Adidas', 'Nike'). 'Unbekannt' if not visible.",
-                  "- color: exact main color in German (e.g. 'navy blau', 'schwarz', 'weiß', 'rot', 'dunkelgrün')",
-                  "- productType: product category in German (e.g. 'Polo T-Shirt', 'Daunenjacke', 'Laufschuhe', 'Jogginghose')",
-                  "- fallbackQueries: 2 simpler queries (brand + color + type, no extra details) for when primaryQuery gives no results",
-                  "- If no product visible: {\"primaryQuery\":\"\",\"brand\":\"Unbekannt\",\"color\":\"\",\"productType\":\"\",\"fallbackQueries\":[]}",
+                  `Example output: ${JSON.stringify(exampleOutput)}`,
+                  "",
+                  "Field rules:",
+                  "- productType: specific German name (e.g. 'Crewneck T-Shirt', 'Daunenjacke', 'Laufschuhe', 'Jogginghose', 'Snapback Cap')",
+                  "- category: one of: Shirt | Jacke | Schuhe | Hose | Hoodie | Uhr | Tasche | Gürtel | Brille | Kleid | Cap | Produkt",
+                  "- brandCandidates: [] if brand not visible; list all plausible brands from any visible logo/text/label",
+                  "- primaryColor: PRECISE color in German — never just 'blau', say 'navy blau', 'hellblau', 'royalblau', 'dunkelblau'",
+                  "- exactSearchQueries: 2–3 queries for Google Shopping Germany. Each MUST include: color + productType. Include brand if visible. Include logo/detail if distinctive. These are used verbatim as search queries.",
+                  "- similarSearchQueries: 1–2 broader queries WITHOUT brand — for when exact queries return too few results",
+                  "- If no fashion product visible: return productType='', exactSearchQueries=[], similarSearchQueries=[]",
                 ].join("\n"),
               },
             ],
@@ -341,13 +382,16 @@ async function generateSearchQueries(imageUrl: string): Promise<ProductAnalysis 
     if (!content) return null;
 
     const parsed = JSON.parse(content) as ProductAnalysis;
-    if (!parsed.primaryQuery || !parsed.color || !parsed.productType) {
+    if (!parsed.productType || !parsed.primaryColor || !parsed.exactSearchQueries?.length) {
       console.warn("[generateSearchQueries] Incomplete GPT response:", parsed);
       return null;
     }
+
     console.log(
-      `[generateSearchQueries] brand="${parsed.brand}" color="${parsed.color}" type="${parsed.productType}" | query: "${parsed.primaryQuery}"`,
+      `[generateSearchQueries] type="${parsed.productType}" color="${parsed.primaryColor}" brands=[${parsed.brandCandidates?.join(", ")}] logo="${parsed.visibleLogo}"`,
     );
+    console.log(`[generateSearchQueries] exact: ${JSON.stringify(parsed.exactSearchQueries)}`);
+    console.log(`[generateSearchQueries] similar: ${JSON.stringify(parsed.similarSearchQueries)}`);
     return parsed;
   } catch (err) {
     console.error("[generateSearchQueries] Fehler:", err);
@@ -439,7 +483,7 @@ export async function searchWithGoogleLens(
       `[Stage 0] Lens: ${lensMatches.length} total, ${lensPriced.length} priced, ${lensEU.length} EU-eligible`,
     );
     console.log(
-      `[Stage 0] GPT: brand="${productAnalysis?.brand ?? "n/a"}" color="${productAnalysis?.color ?? "n/a"}" | query="${productAnalysis?.primaryQuery ?? "n/a"}"`,
+      `[Stage 0] GPT: type="${productAnalysis?.productType ?? "n/a"}" color="${productAnalysis?.primaryColor ?? "n/a"}" brands=[${productAnalysis?.brandCandidates?.join(",") ?? "n/a"}]`,
     );
     lensPriced.forEach((m, i) => {
       const reason = euRejectReason(m);
@@ -457,13 +501,14 @@ export async function searchWithGoogleLens(
     // latency is max(slowest single request) rather than sequential.
     // Lens remains a supplementary pool only.
     // -----------------------------------------------------------------------
-    if (productAnalysis?.primaryQuery) {
-      const baseQuery = productAnalysis.primaryQuery;
+    if (productAnalysis?.exactSearchQueries?.length) {
+      // Use first exact query as the base for site-specific searches.
+      // All exact queries + site-specific variants run in one parallel batch.
+      const baseQuery = productAnalysis.exactSearchQueries[0];
 
-      // Build query list: 1 general + 1 per priority shop
       const stage1Queries: string[] = [
-        baseQuery,
-        ...PRIORITY_SHOP_SITES.map((site) => `${baseQuery} site:${site}`),
+        ...productAnalysis.exactSearchQueries,          // all exact queries (2–3)
+        ...PRIORITY_SHOP_SITES.map((site) => `${baseQuery} site:${site}`), // + site-specific
       ];
 
       console.log(`[Stage 1] Firing ${stage1Queries.length} parallel Shopping searches`);
@@ -495,10 +540,10 @@ export async function searchWithGoogleLens(
     }
 
     // -----------------------------------------------------------------------
-    // Stage 2: FALLBACK — GPT fallback queries OR top Lens titles (no GPT).
+    // Stage 2: FALLBACK — broader/brand-agnostic queries OR top Lens titles.
     // -----------------------------------------------------------------------
     const fallbackQueries: string[] =
-      productAnalysis?.fallbackQueries?.filter(Boolean) ??
+      productAnalysis?.similarSearchQueries?.filter(Boolean) ??
       [...lensPriced]
         .sort((a, b) => shopScore(b) - shopScore(a))
         .slice(0, 3)
@@ -625,11 +670,25 @@ async function refineWithOpenAI(
 
   const colorContext = productAnalysis
     ? [
-        `Photo shows: "${productAnalysis.color} ${productAnalysis.productType}" by ${productAnalysis.brand}.`,
-        `COLOR HARD CONSTRAINT: originalIndex MUST be color="${productAnalysis.color}".`,
-        `A "${productAnalysis.color}" item must NOT map to a different color. If no exact color match exists, pick the closest and set matchQuality="similar".`,
-      ].join(" ")
-    : "Match by COLOR first (this is critical — wrong color = wrong product), then product type, then brand.";
+        `PRODUCT IN PHOTO: ${productAnalysis.primaryColor} ${productAnalysis.productType}.`,
+        productAnalysis.brandCandidates?.length
+          ? `Brand (visible in photo): ${productAnalysis.brandCandidates.join(" / ")}.`
+          : "Brand: not visible or unknown.",
+        productAnalysis.visibleLogo
+          ? `Logo/detail: ${productAnalysis.visibleLogo} (${productAnalysis.logoColor || "color unknown"}).`
+          : "",
+        productAnalysis.distinctiveDetails
+          ? `Distinctive features: ${productAnalysis.distinctiveDetails}.`
+          : "",
+        `Gender: ${productAnalysis.gender || "not specified"}.`,
+        `HARD MATCHING CONSTRAINTS — originalIndex MUST satisfy ALL of:`,
+        `  1. Color = "${productAnalysis.primaryColor}" (any other color → score ≤55 → rejected)`,
+        `  2. Type = "${productAnalysis.productType}" (wrong type → score ≤55 → rejected)`,
+        productAnalysis.brandCandidates?.length
+          ? `  3. Brand = one of [${productAnalysis.brandCandidates.join(", ")}] (wrong/absent brand → −35 pts)`
+          : `  3. Brand not required (not visible in photo)`,
+      ].filter(Boolean).join(" ")
+    : "Match by COLOR first (wrong color = wrong product), then product type, then brand.";
 
   try {
     const response = await fetch(OPENAI_ENDPOINT, {
@@ -745,7 +804,7 @@ async function refineWithOpenAI(
       priced.find((m) => m.image ?? m.thumbnail)?.image ??
       priced.find((m) => m.thumbnail)?.thumbnail;
     const bestImg = (m: PricedMatch) => m.image ?? m.thumbnail ?? anyThumb;
-    const brand = gpt.brand?.trim() || productAnalysis?.brand || guessBrand(original.title);
+    const brand = gpt.brand?.trim() || productAnalysis?.brandCandidates?.[0] || guessBrand(original.title);
     const category = gpt.category?.trim() || guessCategory(original.title);
 
     const toAlt = (match: PricedMatch, role: AlternativeProduct["role"]): AlternativeProduct => ({
