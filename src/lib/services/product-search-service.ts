@@ -652,9 +652,9 @@ export async function searchWithGoogleLens(
       console.log(`[Stage 1] ${stage1All.length} total → ${stage1EU.length} EU-eligible (rejected: ${stage1All.length - stage1EU.length})`);
       stage1All.forEach((m, i) => {
         const r = euRejectReason(m);
-        const passes = r === "passes" || r === "passes(eu_tld)" || r === "passes(known_eu)";
+        const passes = r.startsWith("passes");
         console.log(
-          `  S1[${i}] ${passes ? "EU-OK " : "REJECT"}: "${m.title.slice(0, 50)}" | src="${m.source}" | cur="${m.price.currency ?? "—"}" | price=${m.price.extracted_value} | reason=${r}`,
+          `  S1[${i}] ${passes ? "EU-OK " : "REJECT"}: "${m.title.slice(0, 50)}" | src="${m.source}" | cur="${m.price.currency ?? "—"}" | price=${m.price.extracted_value} | reason=${r} | link=${m.link ? m.link.slice(0, 70) : "(none)"}`,
         );
       });
 
@@ -692,9 +692,9 @@ export async function searchWithGoogleLens(
       console.log(`[Stage 2] ${fallbackAll.length} total → ${fallbackEU.length} EU-eligible (rejected: ${fallbackAll.length - fallbackEU.length})`);
       fallbackAll.forEach((m, i) => {
         const r = euRejectReason(m);
-        const passes = r === "passes" || r === "passes(eu_tld)" || r === "passes(known_eu)";
+        const passes = r.startsWith("passes");
         console.log(
-          `  S2[${i}] ${passes ? "EU-OK " : "REJECT"}: "${m.title.slice(0, 50)}" | src="${m.source}" | cur="${m.price.currency ?? "—"}" | reason=${r}`,
+          `  S2[${i}] ${passes ? "EU-OK " : "REJECT"}: "${m.title.slice(0, 50)}" | src="${m.source}" | cur="${m.price.currency ?? "—"}" | reason=${r} | link=${m.link ? m.link.slice(0, 70) : "(none)"}`,
         );
       });
 
@@ -764,8 +764,8 @@ async function finalizeResult(
   productAnalysis: ProductAnalysis | null,
 ): Promise<AnalysisResult | null> {
   console.log(`[finalizeResult] ENTER: sorted.length=${sorted.length}, need MIN_EU_MATCHES=${MIN_EU_MATCHES}`);
-  sorted.slice(0, 6).forEach((m, i) =>
-    console.log(`  POOL[${i}] "${m.title.slice(0, 50)}" | src="${m.source}" | price=${m.price.extracted_value} ${m.price.currency ?? "?"} | link=${m.link ? "yes" : "NO"}`),
+  sorted.slice(0, 8).forEach((m, i) =>
+    console.log(`  POOL[${i}] "${m.title.slice(0, 50)}" | src="${m.source}" | price=${m.price.extracted_value} ${m.price.currency ?? "?"} | link=${m.link ? m.link.slice(0, 70) : "NO-LINK"}`),
   );
 
   if (sorted.length < MIN_EU_MATCHES) {
@@ -773,27 +773,44 @@ async function finalizeResult(
     return null;
   }
 
+  // Items without a product link are useless — they would produce unclickable cards.
+  // Lens visual_matches often land here with no link; Shopping results always have one.
+  const withLinks = sorted.filter((m) => Boolean(m.link));
+  const withoutLinks = sorted.filter((m) => !Boolean(m.link));
+  console.log(`[finalizeResult] link-partition: ${withLinks.length} with links, ${withoutLinks.length} without`);
+  withoutLinks.forEach((m, i) =>
+    console.log(`  NOLINK[${i}] "${m.title.slice(0, 50)}" @ ${m.source ?? "?"} — Lens visual match, no product URL`),
+  );
+
+  if (withLinks.length === 0) {
+    console.warn(`[finalizeResult] EXIT: ${sorted.length} items in pool but 0 have product links (all Lens visual matches) → null`);
+    return null;
+  }
+
+  // Only pass linked items forward — GPT indices and heuristic picks must all resolve to clickable products.
+  const linkedPool = withLinks;
+
   let candidate: AnalysisResult | null = null;
   if (getOpenAIKey()) {
-    console.log(`[finalizeResult] Calling GPT refinement with ${Math.min(sorted.length, MAX_GPT_MATCHES)} candidates`);
+    console.log(`[finalizeResult] Calling GPT refinement with ${Math.min(linkedPool.length, MAX_GPT_MATCHES)} linked candidates`);
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
     const gptTimeoutPromise = new Promise<null>(
       (resolve) => { timeoutId = setTimeout(() => resolve(null), GPT_TIMEOUT_MS); },
     );
     const gptResult = await Promise.race([
-      refineWithOpenAI(imageUrl, sorted.slice(0, MAX_GPT_MATCHES), productAnalysis),
+      refineWithOpenAI(imageUrl, linkedPool.slice(0, MAX_GPT_MATCHES), productAnalysis),
       gptTimeoutPromise,
     ]);
     if (timeoutId !== null) clearTimeout(timeoutId);
     if (gptResult === null) {
-      console.warn("[finalizeResult] GPT returned null (timeout or score<60) → falling back to heuristic");
+      console.warn("[finalizeResult] GPT returned null (timeout or score<40) → falling back to heuristic");
     } else {
       console.log(`[finalizeResult] GPT succeeded: "${gptResult.originalProduct.name}" matchQuality=${gptResult.matchQuality}`);
     }
-    candidate = gptResult ?? buildResultFromPriced(sorted);
+    candidate = gptResult ?? buildResultFromPriced(linkedPool);
   } else {
     console.log("[finalizeResult] No OpenAI key — using heuristic builder");
-    candidate = buildResultFromPriced(sorted);
+    candidate = buildResultFromPriced(linkedPool);
   }
 
   if (!candidate) {
