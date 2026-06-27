@@ -38,19 +38,11 @@ function CardLink({
   const clean = url && url.trim() !== "" && url !== "#" ? url.trim() : undefined;
 
   if (!clean) {
+    // No real product link — hide entirely. Never show a card that can't be opened.
     console.log(
-      `[ProductCard] title="${debugTitle}" shop="${debugShop}" url="(none)" clicked=no`,
+      `[ProductCard] title="${debugTitle}" shop="${debugShop}" url="(none)" clicked=no — hidden`,
     );
-    return (
-      <div className={`relative select-none ${className}`}>
-        <div className="opacity-50">{children}</div>
-        <div className="absolute bottom-3 right-3">
-          <span className="rounded-full bg-foreground-tertiary/10 px-2 py-0.5 text-[10.5px] font-medium text-foreground-tertiary">
-            Nicht verfügbar
-          </span>
-        </div>
-      </div>
-    );
+    return null;
   }
 
   return (
@@ -108,9 +100,10 @@ export default function AnalyseClient({ id }: { id: string }) {
 
   const { name, brand, confidence, category, original, alternatives, matchQuality } = analysis;
   const isExact = matchQuality === "exact";
+  // Only show alternatives that have a real product link — no dead cards.
   const sortedAlternatives = roleOrder
     .map((role) => alternatives.find((alt) => alt.role === role))
-    .filter((alt): alt is StoredAlternative => Boolean(alt));
+    .filter((alt): alt is StoredAlternative => alt != null && Boolean(alt.link?.trim()));
 
   return (
     <div className="flex min-h-screen flex-col safe-top">

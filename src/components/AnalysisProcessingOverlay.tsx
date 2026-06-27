@@ -4,23 +4,23 @@ export const STAGE_COUNT = 4;
 
 const stages = [
   {
-    label: "Bild wird analysiert",
-    subtitle: "Dein Foto wird verarbeitet und vorbereitet.",
+    label: "Produktdetails werden analysiert",
+    subtitle: "Farbe, Schnitt und Material werden aus dem Foto erkannt.",
     icon: ScanSearch,
   },
   {
-    label: "Produkte werden gesucht",
-    subtitle: "Google Lens durchsucht Millionen von Produkten.",
+    label: "Farbe, Schnitt und Material werden verglichen",
+    subtitle: "Visuelle Merkmale werden mit Millionen Produkten abgeglichen.",
     icon: Search,
   },
   {
-    label: "Preise werden verglichen",
-    subtitle: "Angebote aus zahlreichen Shops werden analysiert.",
+    label: "Passende EU-Angebote werden gesucht",
+    subtitle: "Shops aus Deutschland, Österreich und der EU werden durchsucht.",
     icon: Tag,
   },
   {
-    label: "Beste Treffer werden ausgewählt",
-    subtitle: "Die Top-Alternativen werden für dich kuratiert.",
+    label: "Ergebnisse werden bewertet",
+    subtitle: "Nur Produkte mit hoher Übereinstimmung werden angezeigt.",
     icon: Sparkle,
   },
 ];

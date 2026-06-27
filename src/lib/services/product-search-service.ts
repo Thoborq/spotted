@@ -532,6 +532,15 @@ export async function searchWithGoogleLens(
 // Finalize: GPT refinement with full product context → heuristic fallback
 // ---------------------------------------------------------------------------
 
+function countLinks(result: AnalysisResult): number {
+  return [
+    result.originalProduct.link,
+    result.alternatives.best.link,
+    result.alternatives.cheapest.link,
+    result.alternatives.premium.link,
+  ].filter(Boolean).length;
+}
+
 async function finalizeResult(
   imageUrl: string,
   sorted: PricedMatch[],
@@ -539,24 +548,33 @@ async function finalizeResult(
 ): Promise<AnalysisResult | null> {
   if (sorted.length < MIN_EU_MATCHES) return null;
 
-  if (!getOpenAIKey()) return buildResultFromPriced(sorted);
+  const candidate = getOpenAIKey()
+    ? await (async () => {
+        let timeoutId: ReturnType<typeof setTimeout> | null = null;
+        const gptTimeoutPromise = new Promise<null>(
+          (resolve) => { timeoutId = setTimeout(() => resolve(null), GPT_TIMEOUT_MS); },
+        );
+        const gptResult = await Promise.race([
+          refineWithOpenAI(imageUrl, sorted.slice(0, MAX_GPT_MATCHES), productAnalysis),
+          gptTimeoutPromise,
+        ]);
+        if (timeoutId !== null) clearTimeout(timeoutId);
+        if (gptResult === null) console.warn("[finalizeResult] GPT-Timeout → Heuristik.");
+        return gptResult ?? buildResultFromPriced(sorted);
+      })()
+    : buildResultFromPriced(sorted);
 
-  let timeoutId: ReturnType<typeof setTimeout> | null = null;
-  const gptTimeoutPromise = new Promise<null>(
-    (resolve) => { timeoutId = setTimeout(() => resolve(null), GPT_TIMEOUT_MS); },
-  );
+  if (!candidate) return null;
 
-  const gptResult = await Promise.race([
-    refineWithOpenAI(imageUrl, sorted.slice(0, MAX_GPT_MATCHES), productAnalysis),
-    gptTimeoutPromise,
-  ]);
-  if (timeoutId !== null) clearTimeout(timeoutId);
-
-  if (gptResult === null) {
-    console.warn(`[finalizeResult] GPT-Timeout → Heuristik.`);
-    return buildResultFromPriced(sorted);
+  // Require at least 2 items to have real product links.
+  // Shopping results always have links; this guards against Lens-only pools.
+  const linked = countLinks(candidate);
+  if (linked < 2) {
+    console.warn(`[finalizeResult] Only ${linked}/4 items have product links — skipping this pool`);
+    return null;
   }
-  return gptResult;
+
+  return candidate;
 }
 
 // ---------------------------------------------------------------------------
@@ -612,10 +630,12 @@ async function refineWithOpenAI(
                   "",
                   "STEP 1 — Score each candidate 0–100 using this rubric:",
                   "  +35 pts: brand matches the photo",
-                  "  +35 pts: color matches exactly (navy ≠ white, navy ≠ beige, navy ≠ grey)",
-                  "  +20 pts: product type matches exactly (T-Shirt ≠ Polo Shirt ≠ Hoodie)",
+                  "  +35 pts: color matches exactly (navy ≠ white/beige/grey/black; black ≠ navy/grey/brown)",
+                  "  +20 pts: product type matches exactly (T-Shirt ≠ Polo ≠ Hoodie ≠ Sweatshirt; Sneaker ≠ Boot ≠ Sandal)",
                   "  +10 pts: logo / distinctive detail matches",
-                  "  Max 100. Wrong brand OR wrong color → score ≤65 (below threshold).",
+                  "  HARD RULE: wrong color (even slightly off) → cap score at 55",
+                  "  HARD RULE: wrong product type → cap score at 55",
+                  "  Wrong color OR wrong product type = score ≤55 = rejected. This is non-negotiable.",
                   "",
                   "STEP 2 — Pick indices (all must be different):",
                   "  originalIndex: highest-scored candidate",
