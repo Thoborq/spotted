@@ -11,7 +11,7 @@ import ProductThumb from "@/components/ui/ProductThumb";
 import { getAnalysisById, type StoredAlternative, type StoredAnalysis } from "@/lib/analysis-store";
 import { getDebugData, DEBUG_SESSION_KEY } from "@/lib/use-analysis-flow";
 import { formatPrice } from "@/lib/format";
-import type { PipelineDebug } from "@/lib/analysis-types";
+import type { PipelineDebug, ProductIdentityDebug } from "@/lib/analysis-types";
 
 // ---------------------------------------------------------------------------
 // CardLink — makes the entire card clickable, opens a real product URL.
@@ -58,6 +58,50 @@ function CardLink({
 }
 
 // ---------------------------------------------------------------------------
+// IdentityCard — product identity block shown at top of debug overlay
+// ---------------------------------------------------------------------------
+function IdentityCard({ identity }: { identity: ProductIdentityDebug }) {
+  const conf = identity.confidence;
+  const confColor =
+    conf >= 90 ? "text-green-600" :
+    conf >= 70 ? "text-yellow-600" :
+    "text-red-500";
+
+  return (
+    <div className="mb-4 rounded-lg border border-border bg-background p-3">
+      <p className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-foreground-tertiary">
+        Erkannte Produktidentität
+      </p>
+      <div className="flex items-baseline gap-2">
+        <span className="text-[14px] font-bold text-foreground">
+          {identity.brand}{identity.model ? ` ${identity.model}` : ""}{!identity.brand && !identity.model ? identity.productType : ""}
+        </span>
+        <span className={`text-[12px] font-semibold ${confColor}`}>{conf}% Konfidenz</span>
+      </div>
+      {identity.productType && (identity.brand || identity.model) && (
+        <p className="text-[11px] text-foreground-secondary">{identity.productType}</p>
+      )}
+      <div className="mt-2 rounded bg-surface-secondary px-2 py-1.5">
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-foreground-tertiary">Exact Query</p>
+        <p className="mt-0.5 break-all font-mono text-[11px] text-foreground">
+          {identity.exactProductQuery || <span className="text-red-500 italic">— fehlt —</span>}
+        </p>
+      </div>
+      {identity.fallbackQueries.length > 0 && (
+        <div className="mt-2">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-foreground-tertiary">Fallback Queries</p>
+          {identity.fallbackQueries.map((q, i) => (
+            <p key={i} className="mt-0.5 break-all font-mono text-[11px] text-foreground-secondary">
+              {i + 1}. {q}
+            </p>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // DebugPanel — floating overlay, toggled by a small button bottom-right
 // ---------------------------------------------------------------------------
 function DebugPanel({ debug }: { debug: PipelineDebug }) {
@@ -88,6 +132,9 @@ function DebugPanel({ debug }: { debug: PipelineDebug }) {
           </div>
 
           <div className="flex-1 overflow-y-auto px-4 pb-8 pt-4">
+            {/* Product identity */}
+            {debug.productIdentity && <IdentityCard identity={debug.productIdentity} />}
+
             {/* Queries */}
             <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-foreground-tertiary">
               Queries ({debug.queries.length})

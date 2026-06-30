@@ -52,8 +52,18 @@ export type QueryDebug = {
   rejectedItems: Array<{ title: string; source: string; reason: string }>;
 };
 
+export type ProductIdentityDebug = {
+  brand: string;
+  model: string;
+  productType: string;
+  exactProductQuery: string;
+  fallbackQueries: string[];
+  confidence: number;
+};
+
 export type PipelineDebug = {
   totalRequests: number;
+  productIdentity?: ProductIdentityDebug;
   queries: QueryDebug[];
   finalCandidateCount: number;
   finalProducts: Array<{ title: string; store: string; price: number; link?: string }>;

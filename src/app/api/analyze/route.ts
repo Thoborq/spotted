@@ -59,6 +59,7 @@ export async function POST(request: Request) {
     const liveResult = await searchWithGoogleLens(image, dbg);
     const debug: PipelineDebug = {
       totalRequests: dbg.queries.length,
+      productIdentity: dbg.productIdentity,
       queries: dbg.queries,
       finalCandidateCount: dbg.finalCandidateCount,
       finalProducts: dbg.finalProducts,
@@ -71,6 +72,7 @@ export async function POST(request: Request) {
     console.error("[/api/analyze] SerpAPI-Aufruf fehlgeschlagen:", error);
     const debug: PipelineDebug = {
       totalRequests: dbg.queries.length,
+      productIdentity: dbg.productIdentity,
       queries: dbg.queries,
       finalCandidateCount: dbg.finalCandidateCount,
       finalProducts: dbg.finalProducts,
