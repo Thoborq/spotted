@@ -1,5 +1,11 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import Button from "@/components/ui/Button";
+import DebugOverlay from "@/components/DebugOverlay";
+import { getDebugData } from "@/lib/use-analysis-flow";
 import type { AnalysisOutcome } from "@/lib/use-analysis-flow";
+import type { PipelineDebug } from "@/lib/analysis-types";
 
 const COPY: Record<AnalysisOutcome, { title: string; subtitle: string }> = {
   not_configured: {
@@ -25,6 +31,11 @@ export default function AnalysisUnavailable({
 }) {
   const copy = COPY[outcome];
   const showRetry = outcome === "failed" || outcome === "no_eu_shop";
+  const [debugData, setDebugData] = useState<PipelineDebug | null>(null);
+
+  useEffect(() => {
+    setDebugData(getDebugData());
+  }, []);
 
   return (
     <div className="fixed inset-0 z-[60] flex flex-col items-center justify-center gap-4 bg-background px-10 text-center">
@@ -40,6 +51,9 @@ export default function AnalysisUnavailable({
           Zurück
         </Button>
       </div>
+
+      {/* Debug overlay — always shown so we can diagnose why the search failed */}
+      <DebugOverlay debug={debugData} />
     </div>
   );
 }
