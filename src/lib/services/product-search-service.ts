@@ -21,11 +21,13 @@ export function createDebugCollector(): DebugCollector {
 
 const SERPAPI_ENDPOINT = "https://serpapi.com/search.json";
 const OPENAI_ENDPOINT = "https://api.openai.com/v1/chat/completions";
-const MIN_EU_MATCHES = 2;    // minimum pool size to attempt finalizeResult
-const MIN_FOR_GPT = 2;       // minimum linked candidates to call GPT (1 original + 1 alt)
-const MAX_GPT_MATCHES = 20;  // pass top 20 candidates to GPT so it can pick up to 8
-const MAX_ALTERNATIVES = 7;  // maximum alternatives to show (1 original + 7 = 8 cards)
+const MIN_EU_MATCHES = 2;      // minimum pool size to attempt finalizeResult
+const MIN_FOR_GPT = 2;         // minimum linked candidates to call GPT
+const MAX_GPT_MATCHES = 20;    // pass top 20 candidates to GPT so it can pick up to 8
+const MAX_ALTERNATIVES = 7;    // maximum alternatives to show (1 original + 7 = 8 cards)
 const GPT_TIMEOUT_MS = 9000;
+const MAX_SHOPPING_QUERIES = 3; // hard cap on Shopping API calls per scan
+const EARLY_EXIT_LINKED = 20;  // skip remaining queries if we already have enough
 
 // Accept both env-var spellings (OPEN_API_KEY is a known project typo).
 function getOpenAIKey(): string | undefined {
@@ -676,7 +678,8 @@ export async function searchWithGoogleLens(
       });
     }
 
-    // Build all search queries from the structured vision analysis.
+    // Build query plan from the structured vision analysis.
+    // Max 3 Shopping requests per scan; no site: queries.
     const allQueries: SearchQuery[] = productAnalysis ? buildSearchQueries(productAnalysis) : [];
     const brandQueries = allQueries.filter(
       (q) => q.strategy.startsWith("brand") || q.strategy.startsWith("altbrand"),
@@ -685,133 +688,80 @@ export async function searchWithGoogleLens(
       (q) => !q.strategy.startsWith("brand") && !q.strategy.startsWith("altbrand"),
     );
 
-    // Category-specific shop targets for site: queries.
-    const targetSites = getTargetSites(productAnalysis);
-
     console.log(`[Stage 0] Vision → ${allQueries.length} queries (${brandQueries.length} brand, ${nobrandQueries.length} no-brand):`);
     allQueries.forEach((q, i) => console.log(`  Q[${i}] [${q.strategy}] "${q.query}"`));
-    console.log(`[Stage 0] Target sites (${targetSites.length}): ${targetSites.join(", ")}`);
+
+    // Build ordered plan: best brand query first, then second brand variant,
+    // then no-brand for broader recall. Cap at MAX_SHOPPING_QUERIES.
+    const seenQ = new Set<string>();
+    const queryPlan: string[] = [];
+    const addQ = (q: string | undefined) => {
+      if (q && queryPlan.length < MAX_SHOPPING_QUERIES && !seenQ.has(q.toLowerCase())) {
+        seenQ.add(q.toLowerCase());
+        queryPlan.push(q);
+      }
+    };
+    addQ(brandQueries[0]?.query);    // most specific (brand + color + type)
+    addQ(brandQueries[1]?.query);    // second brand variant
+    addQ(nobrandQueries[0]?.query);  // broad no-brand fallback for recall
+
+    console.log(`[Shopping] Plan: ${queryPlan.length} queries (max ${MAX_SHOPPING_QUERIES}):`);
+    queryPlan.forEach((q, i) => console.log(`  P[${i}] "${q}"`));
 
     let candidates: PricedMatch[] = [...lensDE];
     let hadAnyPricedResults = lensPriced.length > 0;
 
-    // -----------------------------------------------------------------------
-    // Stage 1: brand queries + category-specific site: queries (all parallel).
-    // Always continues to Stage 2 — we collect the full pool before finalizing.
-    // -----------------------------------------------------------------------
-    if (brandQueries.length > 0) {
-      const baseQuery = brandQueries[0].query;
-      const stage1Queries: string[] = [
-        ...brandQueries.map((q) => q.query),
-        ...targetSites.map((site) => `${baseQuery} site:${site}`),
-      ];
+    // Helper: run one textSearch call, filter, log, push to debug, merge into candidates.
+    const runQuery = async (q: string): Promise<void> => {
+      const { priced, rawCount } = await textSearch(q, apiKey);
+      const passed = priced.filter(shipsToGermany);
+      const rejected = priced.filter((m) => !shipsToGermany(m));
+      hadAnyPricedResults = hadAnyPricedResults || priced.length > 0;
 
-      console.log(`[Stage 1] Firing ${stage1Queries.length} parallel Shopping searches`);
-      stage1Queries.forEach((q, i) => console.log(`  S1[${i}] "${q}"`));
-
-      const stage1Results = await Promise.all(stage1Queries.map((q) => textSearch(q, apiKey)));
-      const stage1All = stage1Results.flatMap((r) => r.priced);
-      const stage1DE = stage1All.filter(shipsToGermany);
-      hadAnyPricedResults = hadAnyPricedResults || stage1All.length > 0;
-
-      console.log(`[Stage 1] ${stage1All.length} raw → ${stage1DE.length} ships-to-DE (blocked: ${stage1All.length - stage1DE.length})`);
-      stage1All.forEach((m, i) => {
-        const r = filterReason(m);
-        const passes = r.startsWith("passes");
-        console.log(
-          `  S1[${i}] ${passes ? "DE-OK " : "BLOCK "}: "${m.title.slice(0, 50)}" | src="${m.source}" | cur="${m.price.currency ?? "—"}" | price=${m.price.extracted_value} | ${r} | link=${m.link ? m.link.slice(0, 70) : "(none)"}`,
-        );
+      console.log(`[Shopping] "${q.slice(0, 70)}" → ${rawCount} roh, ${priced.length} priced, ${passed.length} passes`);
+      passed.forEach((m) => {
+        console.log(`  DE-OK: "${m.title.slice(0, 50)}" @ ${m.source} | ${filterReason(m)} | link=${m.link ? m.link.slice(0, 70) : "(none)"}`);
+      });
+      rejected.forEach((m) => {
+        console.log(`  BLOCK: "${m.title.slice(0, 50)}" @ ${m.source} | ${filterReason(m)}`);
       });
 
-      // Debug: one entry per Stage 1 query
       if (debug) {
-        stage1Queries.forEach((q, i) => {
-          const { priced, rawCount } = stage1Results[i];
-          const passed = priced.filter(shipsToGermany);
-          const rejected = priced.filter((m) => !shipsToGermany(m));
-          debug.push({
-            query: q,
-            engine: "google_shopping",
-            rawCount,
-            pricedCount: priced.length,
-            withLinkCount: priced.filter((m) => Boolean(m.link)).length,
-            passedCount: passed.length,
-            rejectedItems: rejected.map((m) => ({
-              title: m.title.slice(0, 60),
-              source: m.source ?? "",
-              reason: filterReason(m),
-            })),
-          });
+        debug.push({
+          query: q,
+          engine: "google_shopping",
+          rawCount,
+          pricedCount: priced.length,
+          withLinkCount: priced.filter((m) => Boolean(m.link)).length,
+          passedCount: passed.length,
+          rejectedItems: rejected.map((m) => ({
+            title: m.title.slice(0, 60),
+            source: m.source ?? "",
+            reason: filterReason(m),
+          })),
         });
       }
 
-      candidates = deduplicate([...candidates, ...stage1DE]);
-      console.log(`[Stage 1] Pool: ${candidates.length} — continuing to Stage 2`);
-    }
+      candidates = deduplicate([...candidates, ...passed]);
+    };
 
     // -----------------------------------------------------------------------
-    // Stage 2: no-brand queries + site: supplements for sparse pools.
-    // Always runs. After Stage 2, finalizeResult is called ONCE with the full pool.
+    // Shopping: fire Q1 alone; if sparse, fire remaining in parallel.
+    // Two HTTP round trips at most (Q1 solo → [Q2, Q3] parallel if needed).
     // -----------------------------------------------------------------------
-    const stage2QueryStrings: string[] = nobrandQueries.length > 0
-      ? nobrandQueries.map((q) => q.query)
-      : [...lensPriced]
-          .sort((a, b) => shopScore(b) - shopScore(a))
-          .slice(0, 3)
-          .map((m) => m.title.trim())
-          .filter(Boolean);
+    if (queryPlan.length > 0) {
+      await runQuery(queryPlan[0]);
+      const linkedAfterQ1 = candidates.filter((m) => Boolean(m.link)).length;
+      console.log(`[Shopping] After Q1: ${candidates.length} candidates, ${linkedAfterQ1} with link`);
 
-    if (stage2QueryStrings.length > 0) {
-      const linkedAfterS1 = candidates.filter((m) => Boolean(m.link)).length;
-
-      // If Stage 1 was thin, fire site: queries for the best no-brand query too.
-      const siteSupplements: string[] =
-        linkedAfterS1 < MIN_FOR_GPT && stage2QueryStrings[0]
-          ? targetSites.slice(0, 5).map((site) => `${stage2QueryStrings[0]} site:${site}`)
-          : [];
-
-      const allStage2Queries = [...stage2QueryStrings.slice(0, 5), ...siteSupplements];
-      console.log(`[Stage 2] ${allStage2Queries.length} queries (${stage2QueryStrings.slice(0, 5).length} no-brand + ${siteSupplements.length} site:):`);
-      allStage2Queries.forEach((q, i) => console.log(`  S2[${i}] "${q}"`));
-
-      const fallbackResults = await Promise.all(allStage2Queries.map((q) => textSearch(q, apiKey)));
-      const fallbackAll = fallbackResults.flatMap((r) => r.priced);
-      const fallbackDE = fallbackAll.filter(shipsToGermany);
-      hadAnyPricedResults = hadAnyPricedResults || fallbackAll.length > 0;
-
-      console.log(`[Stage 2] ${fallbackAll.length} raw → ${fallbackDE.length} ships-to-DE (blocked: ${fallbackAll.length - fallbackDE.length})`);
-      fallbackAll.forEach((m, i) => {
-        const r = filterReason(m);
-        const passes = r.startsWith("passes");
-        console.log(
-          `  S2[${i}] ${passes ? "DE-OK " : "BLOCK "}: "${m.title.slice(0, 50)}" | src="${m.source}" | cur="${m.price.currency ?? "—"}" | ${r} | link=${m.link ? m.link.slice(0, 70) : "(none)"}`,
-        );
-      });
-
-      // Debug: one entry per Stage 2 query
-      if (debug) {
-        allStage2Queries.forEach((q, i) => {
-          const { priced, rawCount } = fallbackResults[i];
-          const passed = priced.filter(shipsToGermany);
-          const rejected = priced.filter((m) => !shipsToGermany(m));
-          debug.push({
-            query: q,
-            engine: "google_shopping",
-            rawCount,
-            pricedCount: priced.length,
-            withLinkCount: priced.filter((m) => Boolean(m.link)).length,
-            passedCount: passed.length,
-            rejectedItems: rejected.map((m) => ({
-              title: m.title.slice(0, 60),
-              source: m.source ?? "",
-              reason: filterReason(m),
-            })),
-          });
-        });
+      if (linkedAfterQ1 < EARLY_EXIT_LINKED && queryPlan.length > 1) {
+        console.log(`[Shopping] Sparse (${linkedAfterQ1} < ${EARLY_EXIT_LINKED}) — firing ${queryPlan.length - 1} more in parallel`);
+        await Promise.all(queryPlan.slice(1).map(runQuery));
+        const linkedFinal = candidates.filter((m) => Boolean(m.link)).length;
+        console.log(`[Shopping] Final pool: ${candidates.length} candidates, ${linkedFinal} with link`);
+      } else if (linkedAfterQ1 >= EARLY_EXIT_LINKED) {
+        console.log(`[Shopping] Early exit: ${linkedAfterQ1} linked >= ${EARLY_EXIT_LINKED}`);
       }
-
-      candidates = deduplicate([...candidates, ...fallbackDE]);
-      console.log(`[Stage 2] Pool: ${candidates.length} ships-to-DE candidates`);
     }
 
     // Record final candidate pool for debug before finalization
@@ -853,9 +803,7 @@ export async function searchWithGoogleLens(
     console.log(`  lensMatches.length  : ${lensMatches.length}`);
     console.log(`  lensPriced.length   : ${lensPriced.length}`);
     console.log(`  lensDE.length       : ${lensDE.length}`);
-    console.log(`  allQueries.length   : ${allQueries.length}`);
-    console.log(`  brandQueries.length : ${brandQueries.length}`);
-    console.log(`  nobrandQueries.length: ${nobrandQueries.length}`);
+    console.log(`  queryPlan.length    : ${queryPlan.length}`);
     console.log(`  RETURN              : ${hadAnyPricedResults ? "no_match" : "null"}`);
     console.log("─────────────────────────────────────────────────────");
     return null;
