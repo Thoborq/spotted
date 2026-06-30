@@ -1,5 +1,5 @@
 import { del, issueSignedToken, presignUrl, put } from "@vercel/blob";
-import type { AlternativeProduct, AnalysisResult, MatchQuality, QueryDebug, PipelineDebug } from "../analysis-types";
+import type { AlternativeProduct, AnalysisResult, MatchQuality, QueryDebug, QueryRawDebug, QueryResponseKey, PipelineDebug } from "../analysis-types";
 import type { UploadedImage } from "../upload";
 
 export type DebugCollector = {
@@ -318,7 +318,7 @@ type GPTRefinement = {
 // SerpAPI Google Shopping — text-based product search
 // ---------------------------------------------------------------------------
 
-type TextSearchResult = { priced: PricedMatch[]; rawCount: number };
+type TextSearchResult = { priced: PricedMatch[]; rawCount: number; rawDebug: QueryRawDebug };
 
 // Broad response type so we can inspect every field SerpAPI sends back.
 type SerpApiRawResponse = {
@@ -342,88 +342,59 @@ async function textSearch(query: string, apiKey: string): Promise<TextSearchResu
     hl:            "de",
     location:      "Germany",
     num:           "40",
-    // api_key added separately and never logged
   };
 
   const url = new URL(SERPAPI_ENDPOINT);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
   url.searchParams.set("api_key", apiKey);
 
-  // ── Log full request (api_key masked) ────────────────────────────────────
-  console.log(`[textSearch] ═══════════════════════════════`);
-  console.log(`[textSearch] REQUEST for: "${query}"`);
-  console.log(`[textSearch]   endpoint : ${SERPAPI_ENDPOINT}`);
-  for (const [k, v] of Object.entries(params)) {
-    console.log(`[textSearch]   ${k.padEnd(14)}: ${v}`);
-  }
-  console.log(`[textSearch]   api_key       : ***masked***`);
+  console.log(`[textSearch] REQUEST "${query}" params=${JSON.stringify(params)}`);
+
+  // Minimal rawDebug returned on all error paths so callers always get an object.
+  const emptyDebug = (): QueryRawDebug => ({
+    requestParams: params,
+    httpStatus: 0,
+    responseKeys: [],
+    sampleProducts: [],
+    chosenField: "(none)",
+  });
 
   try {
     const response = await fetch(url.toString());
-
-    // ── Log HTTP status ───────────────────────────────────────────────────
-    console.log(`[textSearch] HTTP status : ${response.status} ${response.statusText}`);
+    console.log(`[textSearch] HTTP ${response.status} for "${query}"`);
 
     const bodyText = await response.text();
-    console.log(`[textSearch] Response body length: ${bodyText.length} chars`);
 
     if (!response.ok) {
-      console.error(`[textSearch] ERROR body (first 500): ${bodyText.slice(0, 500)}`);
-      return { priced: [], rawCount: 0 };
+      console.error(`[textSearch] HTTP error body: ${bodyText.slice(0, 500)}`);
+      return { priced: [], rawCount: 0, rawDebug: { ...emptyDebug(), httpStatus: response.status, serpError: bodyText.slice(0, 500) } };
     }
 
     let data: SerpApiRawResponse;
     try {
       data = JSON.parse(bodyText) as SerpApiRawResponse;
     } catch {
-      console.error(`[textSearch] JSON parse failed. Body: ${bodyText.slice(0, 500)}`);
-      return { priced: [], rawCount: 0 };
+      console.error(`[textSearch] JSON parse failed: ${bodyText.slice(0, 300)}`);
+      return { priced: [], rawCount: 0, rawDebug: { ...emptyDebug(), httpStatus: response.status, serpError: `JSON parse failed: ${bodyText.slice(0, 300)}` } };
     }
 
-    // ── Full structural analysis of every top-level key ─────────────────────
-    // This runs on every call and emits enough info to determine:
-    //  1. Which keys SerpAPI actually returned
-    //  2. Whether product data lives under a non-standard key
-    //  3. What the first two items of any array look like in full
-    console.log(`[SERP-RESPONSE] ════════════ FULL STRUCTURE ════════════`);
-    if (data.error) {
-      console.error(`[SERP-RESPONSE] error: ${JSON.stringify(data.error)}`);
-    }
-    if (data.search_metadata) {
-      console.log(`[SERP-RESPONSE] search_metadata: ${JSON.stringify(data.search_metadata)}`);
-    }
-    if (data.search_parameters) {
-      console.log(`[SERP-RESPONSE] search_parameters: ${JSON.stringify(data.search_parameters)}`);
-    }
-    if (data.search_information) {
-      console.log(`[SERP-RESPONSE] search_information: ${JSON.stringify(data.search_information)}`);
-    }
-
-    // Dump every remaining top-level key with type + count + first 2 items
-    const SKIP_KEYS = new Set(["search_metadata", "search_parameters", "search_information", "error"]);
-    for (const key of Object.keys(data)) {
-      if (SKIP_KEYS.has(key)) continue;
+    // ── Build structured response key inventory ───────────────────────────
+    const META_KEYS = new Set(["search_metadata", "search_parameters", "search_information", "error"]);
+    const responseKeys: QueryResponseKey[] = Object.keys(data).map((key) => {
       const val = data[key];
-      if (Array.isArray(val)) {
-        console.log(`[SERP-RESPONSE] ${key}: Array(${val.length})`);
-        if (val.length > 0) {
-          console.log(`[SERP-RESPONSE]   ${key}[0]: ${JSON.stringify(val[0]).slice(0, 800)}`);
-        }
-        if (val.length > 1) {
-          console.log(`[SERP-RESPONSE]   ${key}[1]: ${JSON.stringify(val[1]).slice(0, 800)}`);
-        }
-      } else if (val !== null && typeof val === "object") {
-        const subKeys = Object.keys(val as object);
-        console.log(`[SERP-RESPONSE] ${key}: Object{${subKeys.join(", ")}}`);
-      } else {
-        console.log(`[SERP-RESPONSE] ${key}: ${typeof val} = ${String(val).slice(0, 200)}`);
-      }
-    }
-    console.log(`[SERP-RESPONSE] ════════════════════════════════════════`);
+      if (Array.isArray(val)) return { key, type: "array" as const, count: val.length };
+      if (val === null)       return { key, type: "null" as const };
+      const t = typeof val;
+      if (t === "string" || t === "number" || t === "boolean") return { key, type: t, count: undefined };
+      if (t === "object")     return { key, type: "object" as const };
+      return { key, type: "unknown" as const };
+    });
 
-    // ── Pick the best result array ────────────────────────────────────────
-    // Try every key that could plausibly hold shopping product objects.
-    // Criteria: is an array whose first element has a title or name field.
+    // Log concise summary
+    console.log(`[SERP] keys: ${responseKeys.map((k) => `${k.key}${k.type === "array" ? `[${k.count}]` : ""}`).join(", ")}`);
+    if (data.error) console.error(`[SERP] error: ${data.error}`);
+
+    // ── Collect first 3 items from every candidate product array ─────────
     const CANDIDATE_KEYS = [
       "shopping_results", "inline_shopping_results", "organic_results",
       "products", "shopping", "related_products", "product_results",
@@ -431,6 +402,11 @@ async function textSearch(query: string, apiKey: string): Promise<TextSearchResu
       "visual_matches", "images_results",
     ];
 
+    const sampleProducts = CANDIDATE_KEYS
+      .filter((key) => Array.isArray(data[key]) && (data[key] as unknown[]).length > 0)
+      .map((key) => ({ field: key, items: (data[key] as unknown[]).slice(0, 3) }));
+
+    // ── Pick the best result array ────────────────────────────────────────
     let raw: ShoppingApiResult[] = [];
     let chosenKey = "(none)";
 
@@ -439,8 +415,7 @@ async function textSearch(query: string, apiKey: string): Promise<TextSearchResu
       if (!Array.isArray(arr) || arr.length === 0) continue;
       const first = arr[0] as Record<string, unknown>;
       const hasTitle = typeof first.title === "string" || typeof first.name === "string";
-      const hasPrice = first.price !== undefined || first.extracted_price !== undefined
-                    || first.prices !== undefined;
+      const hasPrice = first.price !== undefined || first.extracted_price !== undefined || first.prices !== undefined;
       if (hasTitle || hasPrice) {
         raw = arr as ShoppingApiResult[];
         chosenKey = key;
@@ -448,23 +423,19 @@ async function textSearch(query: string, apiKey: string): Promise<TextSearchResu
       }
     }
 
-    if (raw.length > 0) {
-      console.log(`[textSearch] Using field "${chosenKey}" (${raw.length} items)`);
-    } else {
-      console.warn(`[textSearch] No usable product array found in ANY key for: "${query}"`);
-    }
+    console.log(`[textSearch] "${query}" → ${raw.length} raw from field "${chosenKey}"`);
 
-    console.log(`[textSearch] "${query}" → ${raw.length} raw Shopping results`);
-    raw.forEach((r, i) => {
-      const bestUrl = getBestProductUrl(r);
-      const urlFields: Record<string, string> = {};
-      for (const field of ["link","product_link","shopping_link","serpapi_link","inline_shopping_link","direct_link"] as const) {
-        if (typeof r[field] === "string") urlFields[field] = (r[field] as string).slice(0, 80);
-      }
-      console.log(
-        `  RAW[${i}] "${(r.title ?? "").slice(0, 50)}" | src="${r.source}" | cur="${r.currency}" | ep=${r.extracted_price ?? "—"} | price="${r.price ?? "—"}" | bestUrl=${bestUrl ? bestUrl.slice(0, 80) : "(none)"} | urlFields=${JSON.stringify(urlFields)}`,
-      );
-    });
+    const rawDebug: QueryRawDebug = {
+      requestParams: params,
+      httpStatus: response.status,
+      responseKeys,
+      serpError:            data.error ? String(data.error) : undefined,
+      serpMetadata:         data.search_metadata as Record<string, unknown> | undefined,
+      serpSearchParameters: data.search_parameters,
+      serpSearchInformation:data.search_information as Record<string, unknown> | undefined,
+      sampleProducts,
+      chosenField: chosenKey,
+    };
 
     const priced = raw
       .map((r): PricedMatch | null => {
@@ -492,10 +463,10 @@ async function textSearch(query: string, apiKey: string): Promise<TextSearchResu
       })
       .filter((m): m is PricedMatch => m !== null);
 
-    return { priced, rawCount: raw.length };
+    return { priced, rawCount: raw.length, rawDebug };
   } catch (err) {
     console.error("[textSearch] Fehler:", err);
-    return { priced: [], rawCount: 0 };
+    return { priced: [], rawCount: 0, rawDebug: { ...emptyDebug(), serpError: String(err) } };
   }
 }
 
@@ -915,18 +886,12 @@ export async function searchWithGoogleLens(
 
     // Helper: run one textSearch call, filter, log, push to debug, merge into candidates.
     const runQuery = async (q: string): Promise<void> => {
-      const { priced, rawCount } = await textSearch(q, apiKey);
+      const { priced, rawCount, rawDebug } = await textSearch(q, apiKey);
       const passed = priced.filter(shipsToGermany);
       const rejected = priced.filter((m) => !shipsToGermany(m));
       hadAnyPricedResults = hadAnyPricedResults || priced.length > 0;
 
       console.log(`[Shopping] "${q.slice(0, 70)}" → ${rawCount} roh, ${priced.length} priced, ${passed.length} passes`);
-      passed.forEach((m) => {
-        console.log(`  DE-OK: "${m.title.slice(0, 50)}" @ ${m.source} | ${filterReason(m)} | link=${m.link ? m.link.slice(0, 70) : "(none)"}`);
-      });
-      rejected.forEach((m) => {
-        console.log(`  BLOCK: "${m.title.slice(0, 50)}" @ ${m.source} | ${filterReason(m)}`);
-      });
 
       if (debug) {
         debug.push({
@@ -941,6 +906,7 @@ export async function searchWithGoogleLens(
             source: m.source ?? "",
             reason: filterReason(m),
           })),
+          raw: rawDebug,
         });
       }
 

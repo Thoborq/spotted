@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Bug, ChevronDown, ExternalLink, X } from "lucide-react";
 import { formatPrice } from "@/lib/format";
-import type { PipelineDebug, ProductIdentityDebug } from "@/lib/analysis-types";
+import type { PipelineDebug, ProductIdentityDebug, QueryDebug } from "@/lib/analysis-types";
 
 // ---------------------------------------------------------------------------
 // IdentityCard
@@ -42,6 +42,112 @@ function IdentityCard({ identity }: { identity: ProductIdentityDebug }) {
             </p>
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// QueryRawSection — request params + full response structure for one query
+// ---------------------------------------------------------------------------
+function QueryRawSection({ q }: { q: QueryDebug }) {
+  const raw = q.raw;
+  if (!raw) return <p className="mt-2 text-[10px] italic text-foreground-tertiary">Kein Raw-Debug verfügbar.</p>;
+
+  return (
+    <div className="mt-3 flex flex-col gap-3 border-t border-border pt-3">
+      {/* 1. Request params */}
+      <div>
+        <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-foreground-tertiary">
+          Request-Parameter · HTTP {raw.httpStatus}
+        </p>
+        <div className="rounded bg-surface-secondary px-2 py-1.5">
+          {Object.entries(raw.requestParams).map(([k, v]) => (
+            <div key={k} className="flex gap-2 py-px">
+              <span className="w-28 shrink-0 font-mono text-[10px] text-foreground-tertiary">{k}</span>
+              <span className="min-w-0 break-all font-mono text-[10px] text-foreground">{v}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* SerpAPI error / metadata when 0 results */}
+      {raw.serpError && (
+        <div>
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-red-500">SerpAPI Error</p>
+          <p className="break-all font-mono text-[10px] text-red-400">{raw.serpError}</p>
+        </div>
+      )}
+      {raw.serpMetadata && (
+        <div>
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-foreground-tertiary">search_metadata</p>
+          <pre className="overflow-x-auto rounded bg-surface-secondary px-2 py-1.5 font-mono text-[9px] text-foreground-secondary">
+            {JSON.stringify(raw.serpMetadata, null, 2)}
+          </pre>
+        </div>
+      )}
+      {raw.serpSearchParameters && (
+        <div>
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-foreground-tertiary">search_parameters (von SerpAPI)</p>
+          <pre className="overflow-x-auto rounded bg-surface-secondary px-2 py-1.5 font-mono text-[9px] text-foreground-secondary">
+            {JSON.stringify(raw.serpSearchParameters, null, 2)}
+          </pre>
+        </div>
+      )}
+      {raw.serpSearchInformation && (
+        <div>
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-foreground-tertiary">search_information</p>
+          <pre className="overflow-x-auto rounded bg-surface-secondary px-2 py-1.5 font-mono text-[9px] text-foreground-secondary">
+            {JSON.stringify(raw.serpSearchInformation, null, 2)}
+          </pre>
+        </div>
+      )}
+
+      {/* 2. All top-level keys */}
+      <div>
+        <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-foreground-tertiary">
+          Response-Keys ({raw.responseKeys.length}) · gewählt: <span className="text-foreground">{raw.chosenField}</span>
+        </p>
+        <div className="rounded bg-surface-secondary px-2 py-1.5">
+          {raw.responseKeys.map((rk) => (
+            <div key={rk.key} className="flex items-baseline gap-2 py-px">
+              <span className={`w-40 shrink-0 font-mono text-[10px] ${rk.key === raw.chosenField ? "font-bold text-green-600" : "text-foreground"}`}>
+                {rk.key}
+              </span>
+              <span className="shrink-0 font-mono text-[10px] text-foreground-tertiary">{rk.type}</span>
+              {rk.count !== undefined && (
+                <span className={`font-mono text-[10px] font-bold ${rk.count > 0 ? "text-green-600" : "text-red-400"}`}>
+                  [{rk.count}]
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 3. Sample products from each non-empty product key */}
+      {raw.sampleProducts.length > 0 && (
+        <div>
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-foreground-tertiary">
+            Erste 3 Produkte pro Feld
+          </p>
+          {raw.sampleProducts.map((sp) => (
+            <div key={sp.field} className="mb-2">
+              <p className="mb-0.5 font-mono text-[10px] font-semibold text-foreground">{sp.field} ({sp.items.length})</p>
+              {sp.items.map((item, i) => (
+                <pre key={i} className="mb-1 overflow-x-auto rounded bg-surface-secondary px-2 py-1 font-mono text-[9px] text-foreground-secondary">
+                  {JSON.stringify(item, null, 2).slice(0, 1200)}
+                </pre>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {raw.sampleProducts.length === 0 && (
+        <p className="text-[10px] italic text-red-400">
+          Keine Produktdaten in irgendeinem Feld gefunden.
+        </p>
       )}
     </div>
   );
@@ -111,21 +217,26 @@ export default function DebugOverlay({ debug }: { debug: PipelineDebug | null })
                     </div>
                   </button>
 
-                  {expandedQuery === i && q.rejectedItems.length > 0 && (
-                    <div className="mt-2 border-t border-border pt-2">
-                      <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-foreground-tertiary">
-                        Verworfen ({q.rejectedItems.length})
-                      </p>
-                      {q.rejectedItems.map((item, j) => (
-                        <div key={j} className="flex items-start gap-1.5 py-0.5">
-                          <span className="mt-0.5 shrink-0 rounded bg-red-500/10 px-1 py-px font-mono text-[9px] text-red-500">
-                            {item.reason}
-                          </span>
-                          <span className="min-w-0 break-all font-mono text-[10px] text-foreground-secondary">
-                            {item.title} <span className="text-foreground-tertiary">@ {item.source}</span>
-                          </span>
+                  {expandedQuery === i && (
+                    <div className="mt-2">
+                      {q.rejectedItems.length > 0 && (
+                        <div className="border-t border-border pt-2">
+                          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-foreground-tertiary">
+                            Verworfen ({q.rejectedItems.length})
+                          </p>
+                          {q.rejectedItems.map((item, j) => (
+                            <div key={j} className="flex items-start gap-1.5 py-0.5">
+                              <span className="mt-0.5 shrink-0 rounded bg-red-500/10 px-1 py-px font-mono text-[9px] text-red-500">
+                                {item.reason}
+                              </span>
+                              <span className="min-w-0 break-all font-mono text-[10px] text-foreground-secondary">
+                                {item.title} <span className="text-foreground-tertiary">@ {item.source}</span>
+                              </span>
+                            </div>
+                          ))}
                         </div>
-                      ))}
+                      )}
+                      <QueryRawSection q={q} />
                     </div>
                   )}
                 </div>

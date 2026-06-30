@@ -42,6 +42,29 @@ export type AnalysisResult = {
   alternatives: AlternativeProduct[];
 };
 
+export type QueryResponseKey = {
+  key: string;
+  type: "array" | "object" | "string" | "number" | "boolean" | "null" | "unknown";
+  count?: number; // only for arrays
+};
+
+export type QuerySampleField = {
+  field: string;
+  items: unknown[]; // first 3 raw items
+};
+
+export type QueryRawDebug = {
+  requestParams: Record<string, string>;
+  httpStatus: number;
+  responseKeys: QueryResponseKey[];
+  serpError?: string;
+  serpMetadata?: Record<string, unknown>;
+  serpSearchParameters?: Record<string, string>;
+  serpSearchInformation?: Record<string, unknown>;
+  sampleProducts: QuerySampleField[]; // first 3 items from each non-empty product key
+  chosenField: string; // which field was actually used
+};
+
 export type QueryDebug = {
   query: string;
   engine: string;
@@ -50,6 +73,7 @@ export type QueryDebug = {
   withLinkCount: number;
   passedCount: number;
   rejectedItems: Array<{ title: string; source: string; reason: string }>;
+  raw?: QueryRawDebug; // full SerpAPI request+response data
 };
 
 export type ProductIdentityDebug = {
