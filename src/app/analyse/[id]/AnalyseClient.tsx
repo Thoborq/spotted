@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, Bug, ChevronDown, ChevronUp, ExternalLink, Gem, ShieldCheck, Sparkle, Star, Tag } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { ArrowLeft, Bug, ChevronDown, ChevronUp, ExternalLink, Gem, ShieldCheck, Sparkle, Star, Tag, X } from "lucide-react";
 import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
@@ -58,108 +58,118 @@ function CardLink({
 }
 
 // ---------------------------------------------------------------------------
-// DebugPanel
+// DebugPanel — floating overlay, toggled by a small button bottom-right
 // ---------------------------------------------------------------------------
 function DebugPanel({ debug }: { debug: PipelineDebug }) {
   const [open, setOpen] = useState(false);
   const [expandedQuery, setExpandedQuery] = useState<number | null>(null);
 
   return (
-    <div className="mt-10 rounded-xl border border-dashed border-foreground-tertiary/50 bg-surface-secondary/50">
+    <>
+      {/* Floating toggle button */}
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between px-4 py-3 text-left"
+        className="fixed bottom-24 right-4 z-50 flex items-center gap-1.5 rounded-full bg-foreground/10 px-3 py-1.5 text-[11px] font-semibold text-foreground-secondary backdrop-blur-sm"
       >
-        <span className="flex items-center gap-2 text-[13px] font-semibold text-foreground-secondary">
-          <Bug size={14} />
-          Debug — {debug.totalRequests} SerpAPI-Requests · {debug.finalCandidateCount} Kandidaten
-        </span>
-        {open ? <ChevronUp size={14} className="text-foreground-tertiary" /> : <ChevronDown size={14} className="text-foreground-tertiary" />}
+        <Bug size={12} />
+        Debug
       </button>
 
+      {/* Full-screen overlay */}
       {open && (
-        <div className="border-t border-foreground-tertiary/20 px-4 pb-4 pt-3">
-          {/* Query table */}
-          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-foreground-tertiary">
-            Queries ({debug.queries.length})
-          </p>
-          <div className="flex flex-col gap-2">
-            {debug.queries.map((q, i) => (
-              <div key={i} className="rounded-lg bg-background/60 px-3 py-2">
-                <button
-                  onClick={() => setExpandedQuery(expandedQuery === i ? null : i)}
-                  className="flex w-full items-start justify-between gap-2 text-left"
-                >
-                  <div className="min-w-0 flex-1">
-                    <span className="block truncate font-mono text-[11px] text-foreground">
-                      {q.query}
-                    </span>
-                    <span className="mt-0.5 block text-[10px] text-foreground-tertiary">
-                      {q.engine} · {q.rawCount} roh · {q.pricedCount} mit Preis · {q.withLinkCount} mit Link · {q.passedCount} nach Filter
-                    </span>
-                  </div>
-                  <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold ${q.passedCount > 0 ? "bg-green-500/15 text-green-600" : "bg-red-500/15 text-red-500"}`}>
-                    {q.passedCount > 0 ? `+${q.passedCount}` : "0"}
-                  </span>
-                </button>
-
-                {/* Rejected items (expandable) */}
-                {expandedQuery === i && q.rejectedItems.length > 0 && (
-                  <div className="mt-2 border-t border-foreground-tertiary/15 pt-2">
-                    <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-foreground-tertiary">
-                      Verworfen ({q.rejectedItems.length})
-                    </p>
-                    {q.rejectedItems.map((item, j) => (
-                      <div key={j} className="flex items-start gap-1.5 py-0.5">
-                        <span className="mt-0.5 shrink-0 rounded bg-red-500/10 px-1 py-px font-mono text-[9px] text-red-500">
-                          {item.reason}
-                        </span>
-                        <span className="font-mono text-[10px] text-foreground-secondary">
-                          {item.title} <span className="text-foreground-tertiary">@ {item.source}</span>
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
+        <div className="fixed inset-0 z-[70] flex flex-col bg-background">
+          <div className="flex items-center justify-between border-b border-border px-4 py-3">
+            <span className="text-[14px] font-semibold">
+              Debug — {debug.totalRequests} Requests · {debug.finalCandidateCount} Kandidaten
+            </span>
+            <button onClick={() => setOpen(false)} className="p-1">
+              <X size={18} className="text-foreground-secondary" />
+            </button>
           </div>
 
-          {/* Final products */}
-          {debug.finalProducts.length > 0 && (
-            <div className="mt-4">
-              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-foreground-tertiary">
-                Finale Produkte ({debug.finalProducts.length})
-              </p>
-              {debug.finalProducts.map((p, i) => (
-                <div key={i} className="flex items-center gap-2 py-1">
-                  <span className="w-5 shrink-0 text-center font-mono text-[10px] text-foreground-tertiary">
-                    {i + 1}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-foreground">
-                    {p.title}
-                  </span>
-                  <span className="shrink-0 text-[10px] text-foreground-tertiary">{p.store}</span>
-                  <span className="shrink-0 font-mono text-[10px] font-bold text-foreground">
-                    {formatPrice(p.price)}
-                  </span>
-                  {p.link && (
-                    <a
-                      href={p.link}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      onClick={(e) => { e.stopPropagation(); window.open(p.link!, "_blank", "noopener"); }}
-                    >
-                      <ExternalLink size={10} className="text-foreground-tertiary" />
-                    </a>
+          <div className="flex-1 overflow-y-auto px-4 pb-8 pt-4">
+            {/* Queries */}
+            <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-foreground-tertiary">
+              Queries ({debug.queries.length})
+            </p>
+            <div className="flex flex-col gap-2">
+              {debug.queries.map((q, i) => (
+                <div key={i} className="rounded-lg border border-border bg-surface-secondary px-3 py-2">
+                  <button
+                    onClick={() => setExpandedQuery(expandedQuery === i ? null : i)}
+                    className="flex w-full items-start justify-between gap-2 text-left"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <span className="block break-all font-mono text-[11px] text-foreground">
+                        {q.query}
+                      </span>
+                      <span className="mt-0.5 block text-[10px] text-foreground-tertiary">
+                        {q.engine} · {q.rawCount} roh · {q.pricedCount} mit Preis · {q.withLinkCount} mit Link · {q.passedCount} nach Filter
+                      </span>
+                    </div>
+                    <span className={`ml-2 shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold ${q.passedCount > 0 ? "bg-green-500/15 text-green-600" : "bg-red-500/15 text-red-500"}`}>
+                      {q.passedCount > 0 ? `+${q.passedCount}` : "0"}
+                    </span>
+                  </button>
+
+                  {expandedQuery === i && q.rejectedItems.length > 0 && (
+                    <div className="mt-2 border-t border-border pt-2">
+                      <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-foreground-tertiary">
+                        Verworfen ({q.rejectedItems.length})
+                      </p>
+                      {q.rejectedItems.map((item, j) => (
+                        <div key={j} className="flex items-start gap-1.5 py-0.5">
+                          <span className="mt-0.5 shrink-0 rounded bg-red-500/10 px-1 py-px font-mono text-[9px] text-red-500">
+                            {item.reason}
+                          </span>
+                          <span className="min-w-0 break-all font-mono text-[10px] text-foreground-secondary">
+                            {item.title} <span className="text-foreground-tertiary">@ {item.source}</span>
+                          </span>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
               ))}
             </div>
-          )}
+
+            {/* Final products */}
+            {debug.finalProducts.length > 0 && (
+              <div className="mt-6">
+                <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-foreground-tertiary">
+                  Finale Kandidaten ({debug.finalProducts.length})
+                </p>
+                {debug.finalProducts.map((p, i) => (
+                  <div key={i} className="flex items-center gap-2 border-b border-border/50 py-1.5">
+                    <span className="w-5 shrink-0 text-right font-mono text-[10px] text-foreground-tertiary">
+                      {i + 1}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-foreground">
+                      {p.title}
+                    </span>
+                    <span className="shrink-0 text-[10px] text-foreground-tertiary">{p.store}</span>
+                    <span className="shrink-0 font-mono text-[10px] font-bold text-foreground">
+                      {formatPrice(p.price)}
+                    </span>
+                    {p.link && (
+                      <a
+                        href={p.link}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="shrink-0"
+                        onClick={(e) => { e.stopPropagation(); window.open(p.link!, "_blank", "noopener"); }}
+                      >
+                        <ExternalLink size={10} className="text-foreground-tertiary" />
+                      </a>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
-    </div>
+    </>
   );
 }
 
@@ -181,21 +191,13 @@ const ROLE_PRIORITY: Record<StoredAlternative["role"], number> = {
 // ---------------------------------------------------------------------------
 export default function AnalyseClient({ id }: { id: string }) {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const [analysis, setAnalysis] = useState<StoredAnalysis | null | undefined>(undefined);
   const [debugData, setDebugData] = useState<PipelineDebug | null>(null);
-
-  const isDebug =
-    process.env.NODE_ENV === "development" ||
-    searchParams.get("debug") === "true";
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing with localStorage, a client-only external system
     setAnalysis(getAnalysisById(id) ?? null);
-    if (isDebug) {
-      setDebugData(getDebugData());
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    setDebugData(getDebugData());
   }, [id]);
 
   if (analysis === undefined) return null;
@@ -357,8 +359,8 @@ export default function AnalyseClient({ id }: { id: string }) {
           })}
         </div>
 
-        {/* ---- Debug panel (dev or ?debug=true only) ---- */}
-        {isDebug && debugData && <DebugPanel debug={debugData} />}
+        {/* ---- Debug panel (temporary — remove after testing) ---- */}
+        {debugData && <DebugPanel debug={debugData} />}
       </div>
 
       <div className="fixed inset-x-0 bottom-0 hairline-t bg-background/85 backdrop-blur-xl safe-bottom">

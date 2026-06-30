@@ -21,14 +21,6 @@ export function getDebugData(): PipelineDebug | null {
   } catch { return null; }
 }
 
-function isDebugMode(): boolean {
-  if (typeof window === "undefined") return false;
-  return (
-    process.env.NODE_ENV === "development" ||
-    new URLSearchParams(window.location.search).get("debug") === "true"
-  );
-}
-
 /**
  * "not_configured": kein SERPAPI_KEY gesetzt, echte Suche ist noch nicht
  * aktiviert. "failed": Suche war aktiv, hat aber kein echtes Ergebnis
@@ -71,8 +63,8 @@ export function useAnalysisFlow() {
 
       const data: AnalyzeResponse = await response.json();
 
-      // Store debug data in sessionStorage for the result page (dev or ?debug=true)
-      if (isDebugMode() && data.debug) {
+      // Always store debug data in sessionStorage — panel shown on result page
+      if (data.debug) {
         try {
           window.sessionStorage.setItem(DEBUG_SESSION_KEY, JSON.stringify(data.debug));
         } catch { /* ignore quota errors */ }
