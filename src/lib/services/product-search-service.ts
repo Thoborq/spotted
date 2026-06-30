@@ -222,12 +222,37 @@ type PricedMatch = {
 type ShoppingApiResult = {
   title?: string;
   source?: string;
+  // SerpAPI returns product URLs under several different field names depending
+  // on the query type, engine version, and whether the result is a direct
+  // merchant listing or a Google Shopping aggregation page.
   link?: string;
+  product_link?: string;
+  shopping_link?: string;
+  serpapi_link?: string;
+  inline_shopping_link?: string;
+  direct_link?: string;
+  merchant?: string;
   thumbnail?: string;
   extracted_price?: number;
   currency?: string;
   price?: string;
+  // Catch-all for any other fields in the raw response
+  [key: string]: unknown;
 };
+
+function getBestProductUrl(r: ShoppingApiResult): string | undefined {
+  // Prefer direct merchant URLs over Google-hosted intermediary pages.
+  // product_link / shopping_link typically point to google.com/shopping/…
+  // which is still a valid, clickable destination even if not the merchant directly.
+  const candidate =
+    r.link ||
+    r.direct_link ||
+    r.product_link ||
+    r.shopping_link ||
+    r.inline_shopping_link ||
+    r.serpapi_link;
+  return typeof candidate === "string" && candidate.trim() !== "" ? candidate.trim() : undefined;
+}
 
 // Exported so the debug endpoint and tests can reuse the type.
 export type ProductAnalysis = {
@@ -311,8 +336,14 @@ async function textSearch(query: string, apiKey: string): Promise<TextSearchResu
 
     console.log(`[textSearch] "${query}" → ${raw.length} raw Shopping results`);
     raw.forEach((r, i) => {
+      const bestUrl = getBestProductUrl(r);
+      // Log every URL field present in the raw result so we can see which ones SerpAPI populates.
+      const urlFields: Record<string, string> = {};
+      for (const field of ["link","product_link","shopping_link","serpapi_link","inline_shopping_link","direct_link"] as const) {
+        if (typeof r[field] === "string") urlFields[field] = (r[field] as string).slice(0, 80);
+      }
       console.log(
-        `  RAW[${i}] "${(r.title ?? "").slice(0, 50)}" | src="${r.source}" | cur="${r.currency}" | ep=${r.extracted_price ?? "—"} | price="${r.price ?? "—"}" | link=${r.link ? r.link.slice(0, 80) : "(none)"}`,
+        `  RAW[${i}] "${(r.title ?? "").slice(0, 50)}" | src="${r.source}" | cur="${r.currency}" | ep=${r.extracted_price ?? "—"} | price="${r.price ?? "—"}" | bestUrl=${bestUrl ? bestUrl.slice(0, 80) : "(none)"} | urlFields=${JSON.stringify(urlFields)}`,
       );
     });
 
@@ -335,7 +366,7 @@ async function textSearch(query: string, apiKey: string): Promise<TextSearchResu
         return {
           title: r.title,
           source: r.source,
-          link: r.link,
+          link: getBestProductUrl(r),
           thumbnail: r.thumbnail,
           price: { extracted_value: extractedPrice, currency },
         };
