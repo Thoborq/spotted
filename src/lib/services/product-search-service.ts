@@ -320,33 +320,119 @@ type GPTRefinement = {
 
 type TextSearchResult = { priced: PricedMatch[]; rawCount: number };
 
+// Broad response type so we can inspect every field SerpAPI sends back.
+type SerpApiRawResponse = {
+  search_metadata?: { status?: string; total_time_taken?: number; id?: string };
+  search_parameters?: Record<string, string>;
+  search_information?: { total_results?: string; query_displayed?: string };
+  error?: string;
+  shopping_results?: ShoppingApiResult[];
+  inline_shopping_results?: ShoppingApiResult[];
+  organic_results?: Array<Record<string, unknown>>;
+  [key: string]: unknown;
+};
+
 async function textSearch(query: string, apiKey: string): Promise<TextSearchResult> {
+  // ── Build request params ──────────────────────────────────────────────────
+  const params: Record<string, string> = {
+    engine:        "google_shopping",
+    q:             query,
+    google_domain: "google.de",
+    gl:            "de",
+    hl:            "de",
+    location:      "Germany",
+    num:           "40",
+    // api_key added separately and never logged
+  };
+
+  const url = new URL(SERPAPI_ENDPOINT);
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  url.searchParams.set("api_key", apiKey);
+
+  // ── Log full request (api_key masked) ────────────────────────────────────
+  console.log(`[textSearch] ═══════════════════════════════`);
+  console.log(`[textSearch] REQUEST for: "${query}"`);
+  console.log(`[textSearch]   endpoint : ${SERPAPI_ENDPOINT}`);
+  for (const [k, v] of Object.entries(params)) {
+    console.log(`[textSearch]   ${k.padEnd(14)}: ${v}`);
+  }
+  console.log(`[textSearch]   api_key       : ***masked***`);
+
   try {
-    const url = new URL(SERPAPI_ENDPOINT);
-    url.searchParams.set("engine", "google_shopping");
-    url.searchParams.set("q", query);
-    url.searchParams.set("gl", "de");
-    url.searchParams.set("hl", "de");
-    url.searchParams.set("location", "Germany");
-    url.searchParams.set("api_key", apiKey);
-
-    const debugUrl = new URL(url.toString());
-    debugUrl.searchParams.delete("api_key");
-    console.log(`[textSearch] REQUEST: ${debugUrl.toString()}`);
-
     const response = await fetch(url.toString());
+
+    // ── Log HTTP status ───────────────────────────────────────────────────
+    console.log(`[textSearch] HTTP status : ${response.status} ${response.statusText}`);
+
+    const bodyText = await response.text();
+    console.log(`[textSearch] Response body length: ${bodyText.length} chars`);
+
     if (!response.ok) {
-      console.error(`[textSearch] HTTP ${response.status} für: ${query}`);
+      console.error(`[textSearch] ERROR body (first 500): ${bodyText.slice(0, 500)}`);
       return { priced: [], rawCount: 0 };
     }
 
-    const data = (await response.json()) as { shopping_results?: ShoppingApiResult[] };
-    const raw = data.shopping_results ?? [];
+    let data: SerpApiRawResponse;
+    try {
+      data = JSON.parse(bodyText) as SerpApiRawResponse;
+    } catch {
+      console.error(`[textSearch] JSON parse failed. Body: ${bodyText.slice(0, 500)}`);
+      return { priced: [], rawCount: 0 };
+    }
+
+    // ── Log all top-level keys ────────────────────────────────────────────
+    const topKeys = Object.keys(data);
+    console.log(`[textSearch] Top-level keys (${topKeys.length}): ${topKeys.join(", ")}`);
+
+    if (data.error) {
+      console.error(`[textSearch] SerpAPI error field: ${data.error}`);
+    }
+    if (data.search_metadata) {
+      console.log(`[textSearch] search_metadata.status: ${data.search_metadata.status}`);
+    }
+    if (data.search_information) {
+      console.log(`[textSearch] search_information.total_results: ${data.search_information.total_results}`);
+      console.log(`[textSearch] search_information.query_displayed: ${data.search_information.query_displayed}`);
+    }
+    if (data.search_parameters) {
+      console.log(`[textSearch] search_parameters: ${JSON.stringify(data.search_parameters)}`);
+    }
+
+    // ── Count results in every known array field ──────────────────────────
+    const RESULT_FIELDS = [
+      "shopping_results", "inline_shopping_results", "organic_results",
+      "local_results", "related_shopping_results", "immersive_products",
+    ] as const;
+    for (const field of RESULT_FIELDS) {
+      const arr = data[field];
+      if (Array.isArray(arr)) {
+        console.log(`[textSearch] ${field}: ${arr.length} items`);
+      } else {
+        console.log(`[textSearch] ${field}: absent`);
+      }
+    }
+
+    // ── Use shopping_results; fall back to inline_shopping_results ────────
+    const primaryResults = data.shopping_results;
+    const inlineResults  = data.inline_shopping_results;
+
+    let raw: ShoppingApiResult[];
+    if (Array.isArray(primaryResults) && primaryResults.length > 0) {
+      raw = primaryResults;
+      console.log(`[textSearch] Using shopping_results (${raw.length} items)`);
+    } else if (Array.isArray(inlineResults) && inlineResults.length > 0) {
+      raw = inlineResults;
+      console.log(`[textSearch] Falling back to inline_shopping_results (${raw.length} items)`);
+    } else {
+      raw = [];
+      console.warn(`[textSearch] No shopping results in ANY field for: "${query}"`);
+      // Log first 1000 chars of raw body to spot unexpected structure
+      console.warn(`[textSearch] Body preview: ${bodyText.slice(0, 1000)}`);
+    }
 
     console.log(`[textSearch] "${query}" → ${raw.length} raw Shopping results`);
     raw.forEach((r, i) => {
       const bestUrl = getBestProductUrl(r);
-      // Log every URL field present in the raw result so we can see which ones SerpAPI populates.
       const urlFields: Record<string, string> = {};
       for (const field of ["link","product_link","shopping_link","serpapi_link","inline_shopping_link","direct_link"] as const) {
         if (typeof r[field] === "string") urlFields[field] = (r[field] as string).slice(0, 80);
