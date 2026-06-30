@@ -3,13 +3,31 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { saveAnalysisResult } from "@/lib/analysis-store";
-import type { AnalyzeResponse } from "@/lib/analysis-types";
+import type { AnalyzeResponse, PipelineDebug } from "@/lib/analysis-types";
 
 // Must match STAGE_COUNT in AnalysisProcessingOverlay.tsx.
 // 2.5 s per stage keeps the animation live throughout the real API call (6–15 s).
 export const STAGE_COUNT = 4;
 const STAGE_DURATION = 2500;
 const MIN_PROCESSING_MS = STAGE_DURATION * (STAGE_COUNT - 1);
+
+export const DEBUG_SESSION_KEY = "spotted.debug.pipeline";
+
+export function getDebugData(): PipelineDebug | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(DEBUG_SESSION_KEY);
+    return raw ? (JSON.parse(raw) as PipelineDebug) : null;
+  } catch { return null; }
+}
+
+function isDebugMode(): boolean {
+  if (typeof window === "undefined") return false;
+  return (
+    process.env.NODE_ENV === "development" ||
+    new URLSearchParams(window.location.search).get("debug") === "true"
+  );
+}
 
 /**
  * "not_configured": kein SERPAPI_KEY gesetzt, echte Suche ist noch nicht
@@ -52,6 +70,13 @@ export function useAnalysisFlow() {
       }
 
       const data: AnalyzeResponse = await response.json();
+
+      // Store debug data in sessionStorage for the result page (dev or ?debug=true)
+      if (isDebugMode() && data.debug) {
+        try {
+          window.sessionStorage.setItem(DEBUG_SESSION_KEY, JSON.stringify(data.debug));
+        } catch { /* ignore quota errors */ }
+      }
 
       if (data.status === "ok") {
         const analysisId = saveAnalysisResult(data.result).id;

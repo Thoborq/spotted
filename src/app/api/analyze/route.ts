@@ -3,8 +3,9 @@ import { parseUploadedImage, UploadError } from "@/lib/upload";
 import {
   isProductSearchConfigured,
   searchWithGoogleLens,
+  createDebugCollector,
 } from "@/lib/services/product-search-service";
-import type { AnalyzeResponse } from "@/lib/analysis-types";
+import type { AnalyzeResponse, PipelineDebug } from "@/lib/analysis-types";
 
 /**
  * POST /api/analyze
@@ -52,17 +53,28 @@ export async function POST(request: Request) {
     return NextResponse.json({ status: "not_configured" } satisfies AnalyzeResponse);
   }
 
+  const dbg = createDebugCollector();
+
   try {
-    const liveResult = await searchWithGoogleLens(image);
-    if (liveResult === "no_eu_shop") {
-      return NextResponse.json({ status: "no_eu_shop" } satisfies AnalyzeResponse);
-    }
+    const liveResult = await searchWithGoogleLens(image, dbg);
+    const debug: PipelineDebug = {
+      totalRequests: dbg.queries.length,
+      queries: dbg.queries,
+      finalCandidateCount: dbg.finalCandidateCount,
+      finalProducts: dbg.finalProducts,
+    };
     if (liveResult) {
-      return NextResponse.json({ status: "ok", result: liveResult } satisfies AnalyzeResponse);
+      return NextResponse.json({ status: "ok", result: liveResult, debug } satisfies AnalyzeResponse);
     }
-    return NextResponse.json({ status: "no_match" } satisfies AnalyzeResponse);
+    return NextResponse.json({ status: "no_match", debug } satisfies AnalyzeResponse);
   } catch (error) {
     console.error("[/api/analyze] SerpAPI-Aufruf fehlgeschlagen:", error);
-    return NextResponse.json({ status: "no_match" } satisfies AnalyzeResponse);
+    const debug: PipelineDebug = {
+      totalRequests: dbg.queries.length,
+      queries: dbg.queries,
+      finalCandidateCount: dbg.finalCandidateCount,
+      finalProducts: dbg.finalProducts,
+    };
+    return NextResponse.json({ status: "no_match", debug } satisfies AnalyzeResponse);
   }
 }

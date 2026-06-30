@@ -39,26 +39,38 @@ export type AnalysisResult = {
   confidence: number;
   priceRange: PriceRange;
   matchQuality: MatchQuality;
-  alternatives: {
-    best: AlternativeProduct;
-    cheapest: AlternativeProduct;
-    premium: AlternativeProduct;
-  };
+  alternatives: AlternativeProduct[];
+};
+
+export type QueryDebug = {
+  query: string;
+  engine: string;
+  rawCount: number;
+  pricedCount: number;
+  withLinkCount: number;
+  passedCount: number;
+  rejectedItems: Array<{ title: string; source: string; reason: string }>;
+};
+
+export type PipelineDebug = {
+  totalRequests: number;
+  queries: QueryDebug[];
+  finalCandidateCount: number;
+  finalProducts: Array<{ title: string; store: string; price: number; link?: string }>;
 };
 
 /**
- * Antwortformat von POST /api/analyze. Unterscheidet bewusst zwischen einem
- * echten Treffer und den beiden Nicht-Treffer-Fällen, damit das Frontend nie
- * ein erfundenes Ergebnis anstelle einer echten Analyse anzeigt:
+ * Antwortformat von POST /api/analyze.
  *
  * - "ok": echter SerpAPI-Treffer, `result` ist real.
- * - "not_configured": kein SERPAPI_KEY gesetzt - Produkterkennung ist
- *   schlicht noch nicht aktiviert.
- * - "no_match": SerpAPI war erreichbar, hat aber kein verwertbares
- *   Ergebnis geliefert (zu wenige Treffer, API-Fehler, o.ä.).
+ * - "not_configured": kein SERPAPI_KEY gesetzt.
+ * - "no_match": SerpAPI war erreichbar, kein verwertbares Ergebnis.
+ * - "no_eu_shop": deprecated alias für no_match.
+ *
+ * `debug` ist immer befüllt und enthält die Suchpipeline-Daten.
  */
 export type AnalyzeResponse =
-  | { status: "ok"; result: AnalysisResult }
-  | { status: "not_configured" }
-  | { status: "no_match" }
-  | { status: "no_eu_shop" };
+  | { status: "ok"; result: AnalysisResult; debug?: PipelineDebug }
+  | { status: "not_configured"; debug?: PipelineDebug }
+  | { status: "no_match"; debug?: PipelineDebug }
+  | { status: "no_eu_shop"; debug?: PipelineDebug };

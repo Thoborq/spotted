@@ -1,12 +1,30 @@
 import { del, issueSignedToken, presignUrl, put } from "@vercel/blob";
-import type { AlternativeProduct, AnalysisResult, MatchQuality } from "../analysis-types";
+import type { AlternativeProduct, AnalysisResult, MatchQuality, QueryDebug, PipelineDebug } from "../analysis-types";
 import type { UploadedImage } from "../upload";
+
+export type DebugCollector = {
+  queries: QueryDebug[];
+  finalCandidateCount: number;
+  finalProducts: PipelineDebug["finalProducts"];
+  push(q: QueryDebug): void;
+};
+
+export function createDebugCollector(): DebugCollector {
+  const c: DebugCollector = {
+    queries: [],
+    finalCandidateCount: 0,
+    finalProducts: [],
+    push(q) { c.queries.push(q); },
+  };
+  return c;
+}
 
 const SERPAPI_ENDPOINT = "https://serpapi.com/search.json";
 const OPENAI_ENDPOINT = "https://api.openai.com/v1/chat/completions";
-const MIN_EU_MATCHES = 2;   // minimum pool size to attempt finalizeResult
-const MIN_FOR_GPT = 4;      // GPT needs 4 candidates to assign 4 distinct roles
-const MAX_GPT_MATCHES = 12;
+const MIN_EU_MATCHES = 2;    // minimum pool size to attempt finalizeResult
+const MIN_FOR_GPT = 2;       // minimum linked candidates to call GPT (1 original + 1 alt)
+const MAX_GPT_MATCHES = 20;  // pass top 20 candidates to GPT so it can pick up to 8
+const MAX_ALTERNATIVES = 7;  // maximum alternatives to show (1 original + 7 = 8 cards)
 const GPT_TIMEOUT_MS = 9000;
 
 // Accept both env-var spellings (OPEN_API_KEY is a known project typo).
@@ -30,27 +48,18 @@ function normalizeCurrency(raw: string | undefined | null): string {
 }
 
 // ---------------------------------------------------------------------------
-// EU eligibility
+// Ships-to-Germany filter
+//
+// We trust Google Shopping's gl=de&location=Germany geotargeting to return
+// results relevant for German shoppers. All we do here is block the small
+// set of US-only retailers and resale platforms that sometimes slip through.
 // ---------------------------------------------------------------------------
 
 const EU_TLD = /\.(de|at|ch|nl|fr|it|es|be|dk|se|fi|pl|pt|ie|eu)\b/;
 
-const KNOWN_EU_SHOP_SOURCES = [
-  "zalando", "about you", "aboutyou",
-  "breuninger", "peek & cloppenburg", "peek cloppenburg",
-  "mytheresa", "luisaviaroma", "luisa via roma",
-  "farfetch", "end.", "end clothing", "ssense",
-  "mr porter", "mrporter", "net-a-porter", "netaporter", "yoox",
-  "bstn", "solebox", "hhv", "snipes", "asphaltgold", "43einhalb",
-  "foot locker", "footlocker", "jd sports",
-  "footshop", "sizeer", "footpatrol", "overkill",
-  "deichmann", "görtz", "goertz", "humanic",
-  "planet sports", "intersport", "decathlon",
-  "galeries lafayette", "el corte ingles", "la redoute",
-  "c&a", "moncler", "stone island", "cp company", "parajumpers",
-];
-
-const EXCLUDED_SHOP_SOURCES = [
+// Shops that are hard-blocked: US-only retail chains and resale/C2C platforms
+// that don't ship to Germany or create customs/VAT complications.
+const BLOCKED_SHOPS = [
   "walmart", "target", "macy", "nordstrom",
   "kohls", "kohl's", "jcpenney", "sears", "belk", "dillards",
   "tj maxx", "tjmaxx", "ross ", "bloomingdale", "neiman marcus",
@@ -60,127 +69,127 @@ const EXCLUDED_SHOP_SOURCES = [
   "ebay.com", "amazon.com",
 ];
 
-// These shops ship reliably to Germany/EU regardless of display currency.
-// Farfetch = GBP, SSENSE = USD, Mr Porter = GBP — all ship to EU, all legit.
-const SHIPS_TO_EU_ALWAYS = [
-  "farfetch", "mytheresa", "ssense",
-  "mr porter", "mrporter", "net-a-porter", "netaporter",
-  "yoox", "luisaviaroma", "luisa via roma",
-  "end.", "end clothing",
-];
-
-const OFFICIAL_BRAND_DOMAINS = [
-  "nike", "adidas", "puma", "reebok", "newbalance", "new-balance",
-  "converse", "vans", "tommy", "calvinklein", "ralphlauren", "lacoste",
-  "hugoboss", "zara", "uniqlo", "mango", "gucci", "prada",
-  "louisvuitton", "dior", "balenciaga", "versace", "burberry",
-  "thenorthface", "patagonia", "apple", "samsung", "sony",
-  "levi", "gap", "cos", "arket", "filippa",
-  "cpcompany", "stoneisland", "moncler", "parajumpers", "arcteryx",
-];
-
-function isEUEligible(m: PricedMatch): boolean {
-  const currency = normalizeCurrency(m.price.currency);
-  const src = (m.source ?? "").toLowerCase();
-  const href = (m.link ?? "").toLowerCase();
-
-  // Hard-exclude non-EU marketplaces and US retailers first.
-  if (EXCLUDED_SHOP_SOURCES.some((s) =>
-    src.includes(s) || href.includes(s.replace(/ /g, ""))
-  )) return false;
-
-  // EUR → always accept.
-  if (currency === "€") return true;
-
-  // Non-EUR from shops that reliably ship to EU → accept.
-  // Farfetch/SSENSE/Mr Porter show GBP or USD but ship to Germany fine.
-  if (currency !== "" && SHIPS_TO_EU_ALWAYS.some((s) => src.includes(s))) return true;
-
-  // Any other non-EUR currency → reject (e.g. amazon.co.uk with GBP, US shops).
-  if (currency !== "" && currency !== "€") return false;
-
-  // No currency field — accept from clearly EU sources.
-  if (EU_TLD.test(href)) return true;
-  if (KNOWN_EU_SHOP_SOURCES.some((s) => src.includes(s))) return true;
-  if (OFFICIAL_BRAND_DOMAINS.some((d) =>
-    href.includes(d) && (/\.de\b/.test(href) || /\.com\/(de|eu|at|ch)/.test(href))
-  )) return true;
-
-  return false;
-}
-
-function euRejectReason(m: PricedMatch): string {
-  const currency = normalizeCurrency(m.price.currency);
-  const src = (m.source ?? "").toLowerCase();
-  const href = (m.link ?? "").toLowerCase();
-  if (EXCLUDED_SHOP_SOURCES.some((s) => src.includes(s) || href.includes(s.replace(/ /g, "")))) return "excluded_shop";
-  if (currency === "€") return "passes(eur)";
-  if (currency !== "" && SHIPS_TO_EU_ALWAYS.some((s) => src.includes(s))) return `passes(premium_nonEUR:${currency})`;
-  if (currency !== "" && currency !== "€") return `currency_rejected="${currency}"`;
-  if (EU_TLD.test(href)) return "passes(eu_tld)";
-  if (KNOWN_EU_SHOP_SOURCES.some((s) => src.includes(s))) return "passes(known_eu)";
-  if (OFFICIAL_BRAND_DOMAINS.some((d) => href.includes(d) && (/\.de\b/.test(href) || /\.com\/(de|eu|at|ch)/.test(href)))) return "passes(brand_eu)";
-  return "unknown_no_currency";
-}
-
-// ---------------------------------------------------------------------------
-// Shop priority scoring — 7 tiers + image bonus
-// ---------------------------------------------------------------------------
-
-const GERMAN_SHOPS = [
+// All shops known to ship reliably to Germany (used for shopScore bonus only).
+const SHIPS_TO_DE = [
+  // German generalists
   "zalando", "about you", "aboutyou", "breuninger",
   "peek & cloppenburg", "peek cloppenburg",
   "snipes", "bstn", "solebox", "hhv",
   "asphaltgold", "43einhalb", "footpatrol", "overkill",
   "planet sports", "görtz", "goertz", "deichmann",
   "foot locker", "footlocker", "jd sports",
-];
-
-const PREMIUM_EU_INTL = [
+  "footshop", "sizeer", "intersport", "decathlon",
+  // EU / international premium
   "farfetch", "mytheresa", "ssense",
   "mr porter", "mrporter", "net-a-porter", "netaporter",
   "yoox", "luisaviaroma", "luisa via roma",
   "end.", "end clothing",
+  "matches", "cettire", "baltini", "italist",
+  // Brand direct (all have DE storefronts or ship to Germany)
+  "nike", "adidas", "puma", "reebok",
+  "converse", "vans", "new balance",
+  "ralph lauren", "lacoste", "tommy", "hugo boss", "boss",
+  "cp company", "stone island", "moncler",
+  "north face", "patagonia", "canada goose",
+  "levi", "gap", "uniqlo", "cos", "arket",
+  "gucci", "prada", "versace", "burberry", "dior",
+  "galeries lafayette", "el corte ingles", "la redoute",
+  "c&a", "humanic", "planet sports",
 ];
 
-// Shops to target with dedicated site: queries in parallel with the general Shopping search.
-// Ordered by trust/relevance: DE generalists → DE specialists → premium EU intl.
-const PRIORITY_SHOP_SITES = [
-  "zalando.de",
-  "aboutyou.de",
-  "breuninger.com",
-  "peek-cloppenburg.de",
-  "ralphlauren.de",
-  "farfetch.com",
-  "mrporter.com",
-  "mytheresa.com",
-  "luisaviaroma.com",
+/**
+ * Returns true if this result is from a shop that ships to Germany without
+ * customs/VAT complications. Relies on Google Shopping gl=de geotargeting
+ * to handle the bulk of the filtering; we only explicitly block US-only
+ * retail and resale platforms.
+ */
+function shipsToGermany(m: PricedMatch): boolean {
+  const src = (m.source ?? "").toLowerCase();
+  const href = (m.link ?? "").toLowerCase();
+  return !BLOCKED_SHOPS.some((s) => src.includes(s) || href.includes(s.replace(/ /g, "")));
+}
+
+function filterReason(m: PricedMatch): string {
+  const src = (m.source ?? "").toLowerCase();
+  const href = (m.link ?? "").toLowerCase();
+  const currency = normalizeCurrency(m.price.currency);
+  if (BLOCKED_SHOPS.some((s) => src.includes(s) || href.includes(s.replace(/ /g, "")))) return "blocked_shop";
+  if (currency === "€") return "passes(eur)";
+  if (EU_TLD.test(href)) return "passes(eu_tld)";
+  if (SHIPS_TO_DE.some((s) => src.includes(s))) return "passes(known_de_shop)";
+  return `passes(unknown:cur=${currency || "?"})`;
+}
+
+// ---------------------------------------------------------------------------
+// Shop priority scoring — 7 tiers + image bonus
+// ---------------------------------------------------------------------------
+
+// Category-based site: query targets. Sneaker searches go to sneaker shops,
+// fashion goes to fashion shops, luxury to luxury shops.
+const SNEAKER_SITES = [
+  "nike.com", "adidas.com",
+  "zalando.de", "aboutyou.de",
+  "foot-locker.de", "jdsports.de",
+  "endclothing.com", "snipes.com",
+  "bstn.com", "solebox.com",
 ] as const;
+
+const FASHION_SITES = [
+  "zalando.de", "aboutyou.de",
+  "breuninger.com", "peek-cloppenburg.de",
+  "farfetch.com", "mytheresa.com",
+  "mrporter.com", "ssense.com",
+] as const;
+
+const LUXURY_SITES = [
+  "farfetch.com", "mytheresa.com",
+  "luisaviaroma.com", "mrporter.com",
+  "cettire.com", "ssense.com",
+] as const;
+
+// Luxury brands whose products should be routed to luxury shop targets.
+const LUXURY_BRAND_NAMES = [
+  "gucci", "prada", "louis vuitton", "chanel", "dior",
+  "balenciaga", "versace", "burberry", "moncler",
+  "stone island", "cp company", "canada goose",
+  "arc'teryx", "arcteryx", "parajumpers",
+];
+
+function getTargetSites(analysis: ProductAnalysis | null): readonly string[] {
+  if (!analysis) return FASHION_SITES;
+  const cat = analysis.category.toLowerCase();
+  const type = analysis.productType.toLowerCase();
+  const brand = (analysis.brand || analysis.brandCandidates?.[0] || "").toLowerCase();
+
+  const isSneaker =
+    /schuh|sneaker/.test(cat) ||
+    /air max|air force|samba|jordan|chuck|yeezy|ultra boost|forum|superstar|gazelle|campus|stan smith|cortez|dunk|blazer/i.test(type);
+  const isLuxury = LUXURY_BRAND_NAMES.some((b) => brand.includes(b));
+
+  if (isSneaker) return SNEAKER_SITES;
+  if (isLuxury) return LUXURY_SITES;
+  return FASHION_SITES;
+}
 
 function shopScore(m: PricedMatch): number {
   const src = (m.source ?? "").toLowerCase();
   const href = (m.link ?? "").toLowerCase();
   const hasImage = Boolean(m.image ?? m.thumbnail);
-  let score = 0;
+  const currency = normalizeCurrency(m.price.currency);
 
-  const isBrand = OFFICIAL_BRAND_DOMAINS.some((d) => href.includes(d));
-  if (isBrand) {
-    score = /\.de\b/.test(href) || /\.com\/(de|eu|at|ch)/.test(href) ? 90 : 50;
-  } else if (GERMAN_SHOPS.some((s) => src.includes(s))) {
-    score = 80;
-  } else if (/\.de\b/.test(href)) {
-    score = 60;
-  } else if (/\.(at|ch)\b/.test(href)) {
-    score = 50;
+  let score = 0;
+  if (SHIPS_TO_DE.some((s) => src.includes(s))) {
+    // Known curated shop
+    score = /\.de\b/.test(href) ? 80 : currency === "€" ? 70 : 55;
+  } else if (currency === "€") {
+    score = /\.de\b/.test(href) ? 65 : EU_TLD.test(href) ? 50 : 40;
   } else if (EU_TLD.test(href)) {
-    score = 40;
-  } else if (PREMIUM_EU_INTL.some((s) => src.includes(s))) {
-    score = 30;
+    score = 35;
   } else {
-    score = 10;
+    score = 15;
   }
 
-  if (hasImage) score += 20;
+  if (hasImage) score += 15;
   return score;
 }
 
@@ -261,11 +270,9 @@ export type VisionDebugReport = {
 };
 
 type GPTRefinement = {
-  scores: number[];     // one score per candidate (0–100), same order as input
-  originalIndex: number;
-  bestIndex: number;
-  cheapestIndex: number;
-  premiumIndex: number;
+  scores: number[];       // one score per candidate (0–100), same order as input
+  originalIndex: number;  // index of the best overall match for the photo
+  topIndices: number[];   // up to 8 indices sorted by relevance (best first), starts with originalIndex
   productName: string;
   brand: string;
   category: string;
@@ -277,7 +284,9 @@ type GPTRefinement = {
 // SerpAPI Google Shopping — text-based product search
 // ---------------------------------------------------------------------------
 
-async function textSearch(query: string, apiKey: string): Promise<PricedMatch[]> {
+type TextSearchResult = { priced: PricedMatch[]; rawCount: number };
+
+async function textSearch(query: string, apiKey: string): Promise<TextSearchResult> {
   try {
     const url = new URL(SERPAPI_ENDPOINT);
     url.searchParams.set("engine", "google_shopping");
@@ -287,7 +296,6 @@ async function textSearch(query: string, apiKey: string): Promise<PricedMatch[]>
     url.searchParams.set("location", "Germany");
     url.searchParams.set("api_key", apiKey);
 
-    // Log the full URL without API key so we can reproduce the call manually
     const debugUrl = new URL(url.toString());
     debugUrl.searchParams.delete("api_key");
     console.log(`[textSearch] REQUEST: ${debugUrl.toString()}`);
@@ -295,7 +303,7 @@ async function textSearch(query: string, apiKey: string): Promise<PricedMatch[]>
     const response = await fetch(url.toString());
     if (!response.ok) {
       console.error(`[textSearch] HTTP ${response.status} für: ${query}`);
-      return [];
+      return { priced: [], rawCount: 0 };
     }
 
     const data = (await response.json()) as { shopping_results?: ShoppingApiResult[] };
@@ -308,7 +316,7 @@ async function textSearch(query: string, apiKey: string): Promise<PricedMatch[]>
       );
     });
 
-    return raw
+    const priced = raw
       .map((r): PricedMatch | null => {
         let extractedPrice = r.extracted_price;
         if (typeof extractedPrice !== "number" && r.price) {
@@ -333,9 +341,11 @@ async function textSearch(query: string, apiKey: string): Promise<PricedMatch[]>
         };
       })
       .filter((m): m is PricedMatch => m !== null);
+
+    return { priced, rawCount: raw.length };
   } catch (err) {
     console.error("[textSearch] Fehler:", err);
-    return [];
+    return { priced: [], rawCount: 0 };
   }
 }
 
@@ -549,7 +559,8 @@ function deduplicate(matches: PricedMatch[]): PricedMatch[] {
 
 export async function searchWithGoogleLens(
   image: UploadedImage,
-): Promise<AnalysisResult | null | "no_eu_shop"> {
+  debug?: DebugCollector,
+): Promise<AnalysisResult | null> {
   const apiKey = process.env.SERPAPI_KEY;
   if (!apiKey) return null;
 
@@ -604,17 +615,35 @@ export async function searchWithGoogleLens(
       (m): m is PricedMatch =>
         typeof m.price?.extracted_value === "number" && Boolean(m.title),
     );
-    const lensEU = lensPriced.filter(isEUEligible);
+    const lensDE = lensPriced.filter(shipsToGermany);
 
     console.log(
-      `[Stage 0] Lens: ${lensMatches.length} total, ${lensPriced.length} priced, ${lensEU.length} EU-eligible`,
+      `[Stage 0] Lens: ${lensMatches.length} total, ${lensPriced.length} priced, ${lensDE.length} ships-to-DE`,
     );
     lensPriced.forEach((m, i) => {
-      const reason = euRejectReason(m);
+      const reason = filterReason(m);
       console.log(
         `  L[${i}] "${m.title.slice(0, 45)}" | src="${m.source}" | cur="${m.price.currency}" | ${reason}`,
       );
     });
+
+    // Debug: record Lens call
+    if (debug) {
+      const lensRejected = lensPriced.filter((m) => !shipsToGermany(m));
+      debug.push({
+        query: "(Google Lens visual match)",
+        engine: "google_lens",
+        rawCount: lensMatches.length,
+        pricedCount: lensPriced.length,
+        withLinkCount: lensPriced.filter((m) => Boolean(m.link)).length,
+        passedCount: lensDE.length,
+        rejectedItems: lensRejected.map((m) => ({
+          title: m.title.slice(0, 60),
+          source: m.source ?? "",
+          reason: filterReason(m),
+        })),
+      });
+    }
 
     // Build all search queries from the structured vision analysis.
     const allQueries: SearchQuery[] = productAnalysis ? buildSearchQueries(productAnalysis) : [];
@@ -625,51 +654,73 @@ export async function searchWithGoogleLens(
       (q) => !q.strategy.startsWith("brand") && !q.strategy.startsWith("altbrand"),
     );
 
-    // Full query log — the main observability instrument.
-    console.log(`[Stage 0] Vision → ${allQueries.length} queries (${brandQueries.length} brand, ${nobrandQueries.length} no-brand):`);
-    allQueries.forEach((q, i) =>
-      console.log(`  Q[${i}] [${q.strategy}] "${q.query}"`),
-    );
+    // Category-specific shop targets for site: queries.
+    const targetSites = getTargetSites(productAnalysis);
 
-    let allEU: PricedMatch[] = [...lensEU];
+    console.log(`[Stage 0] Vision → ${allQueries.length} queries (${brandQueries.length} brand, ${nobrandQueries.length} no-brand):`);
+    allQueries.forEach((q, i) => console.log(`  Q[${i}] [${q.strategy}] "${q.query}"`));
+    console.log(`[Stage 0] Target sites (${targetSites.length}): ${targetSites.join(", ")}`);
+
+    let candidates: PricedMatch[] = [...lensDE];
     let hadAnyPricedResults = lensPriced.length > 0;
 
     // -----------------------------------------------------------------------
-    // Stage 1: brand queries + site-specific variants (all parallel).
+    // Stage 1: brand queries + category-specific site: queries (all parallel).
+    // Always continues to Stage 2 — we collect the full pool before finalizing.
     // -----------------------------------------------------------------------
     if (brandQueries.length > 0) {
       const baseQuery = brandQueries[0].query;
       const stage1Queries: string[] = [
         ...brandQueries.map((q) => q.query),
-        ...PRIORITY_SHOP_SITES.map((site) => `${baseQuery} site:${site}`),
+        ...targetSites.map((site) => `${baseQuery} site:${site}`),
       ];
 
       console.log(`[Stage 1] Firing ${stage1Queries.length} parallel Shopping searches`);
       stage1Queries.forEach((q, i) => console.log(`  S1[${i}] "${q}"`));
 
-      const stage1Raw = await Promise.all(stage1Queries.map((q) => textSearch(q, apiKey)));
-      const stage1All = stage1Raw.flat();
-      const stage1EU = stage1All.filter(isEUEligible);
+      const stage1Results = await Promise.all(stage1Queries.map((q) => textSearch(q, apiKey)));
+      const stage1All = stage1Results.flatMap((r) => r.priced);
+      const stage1DE = stage1All.filter(shipsToGermany);
       hadAnyPricedResults = hadAnyPricedResults || stage1All.length > 0;
 
-      console.log(`[Stage 1] ${stage1All.length} total → ${stage1EU.length} EU-eligible (rejected: ${stage1All.length - stage1EU.length})`);
+      console.log(`[Stage 1] ${stage1All.length} raw → ${stage1DE.length} ships-to-DE (blocked: ${stage1All.length - stage1DE.length})`);
       stage1All.forEach((m, i) => {
-        const r = euRejectReason(m);
+        const r = filterReason(m);
         const passes = r.startsWith("passes");
         console.log(
-          `  S1[${i}] ${passes ? "EU-OK " : "REJECT"}: "${m.title.slice(0, 50)}" | src="${m.source}" | cur="${m.price.currency ?? "—"}" | price=${m.price.extracted_value} | reason=${r} | link=${m.link ? m.link.slice(0, 70) : "(none)"}`,
+          `  S1[${i}] ${passes ? "DE-OK " : "BLOCK "}: "${m.title.slice(0, 50)}" | src="${m.source}" | cur="${m.price.currency ?? "—"}" | price=${m.price.extracted_value} | ${r} | link=${m.link ? m.link.slice(0, 70) : "(none)"}`,
         );
       });
 
-      allEU = deduplicate([...allEU, ...stage1EU]);
-      console.log(`[Stage 1] Pool: ${allEU.length} EU results — continuing to Stage 2 to collect more candidates`);
+      // Debug: one entry per Stage 1 query
+      if (debug) {
+        stage1Queries.forEach((q, i) => {
+          const { priced, rawCount } = stage1Results[i];
+          const passed = priced.filter(shipsToGermany);
+          const rejected = priced.filter((m) => !shipsToGermany(m));
+          debug.push({
+            query: q,
+            engine: "google_shopping",
+            rawCount,
+            pricedCount: priced.length,
+            withLinkCount: priced.filter((m) => Boolean(m.link)).length,
+            passedCount: passed.length,
+            rejectedItems: rejected.map((m) => ({
+              title: m.title.slice(0, 60),
+              source: m.source ?? "",
+              reason: filterReason(m),
+            })),
+          });
+        });
+      }
+
+      candidates = deduplicate([...candidates, ...stage1DE]);
+      console.log(`[Stage 1] Pool: ${candidates.length} — continuing to Stage 2`);
     }
 
     // -----------------------------------------------------------------------
-    // Stage 2: no-brand queries (higher recall) OR top Lens titles as last resort.
-    // Always runs — we want the full pool before calling finalizeResult once.
-    // When Stage 1 left < MIN_FOR_GPT linked results, we also fire site: queries
-    // for the best no-brand query so GPT has enough distinct items to fill 4 roles.
+    // Stage 2: no-brand queries + site: supplements for sparse pools.
+    // Always runs. After Stage 2, finalizeResult is called ONCE with the full pool.
     // -----------------------------------------------------------------------
     const stage2QueryStrings: string[] = nobrandQueries.length > 0
       ? nobrandQueries.map((q) => q.query)
@@ -680,13 +731,12 @@ export async function searchWithGoogleLens(
           .filter(Boolean);
 
     if (stage2QueryStrings.length > 0) {
-      const linkedAfterStage1 = allEU.filter((m) => Boolean(m.link)).length;
+      const linkedAfterS1 = candidates.filter((m) => Boolean(m.link)).length;
 
-      // When Stage 1 is thin (< 4 linked items), supplement with site: queries
-      // for the first no-brand query against the top priority shops.
+      // If Stage 1 was thin, fire site: queries for the best no-brand query too.
       const siteSupplements: string[] =
-        linkedAfterStage1 < MIN_FOR_GPT && stage2QueryStrings[0]
-          ? PRIORITY_SHOP_SITES.slice(0, 5).map((site) => `${stage2QueryStrings[0]} site:${site}`)
+        linkedAfterS1 < MIN_FOR_GPT && stage2QueryStrings[0]
+          ? targetSites.slice(0, 5).map((site) => `${stage2QueryStrings[0]} site:${site}`)
           : [];
 
       const allStage2Queries = [...stage2QueryStrings.slice(0, 5), ...siteSupplements];
@@ -694,38 +744,70 @@ export async function searchWithGoogleLens(
       allStage2Queries.forEach((q, i) => console.log(`  S2[${i}] "${q}"`));
 
       const fallbackResults = await Promise.all(allStage2Queries.map((q) => textSearch(q, apiKey)));
-      const fallbackAll = fallbackResults.flat();
-      const fallbackEU = fallbackAll.filter(isEUEligible);
+      const fallbackAll = fallbackResults.flatMap((r) => r.priced);
+      const fallbackDE = fallbackAll.filter(shipsToGermany);
       hadAnyPricedResults = hadAnyPricedResults || fallbackAll.length > 0;
 
-      console.log(`[Stage 2] ${fallbackAll.length} total → ${fallbackEU.length} EU-eligible (rejected: ${fallbackAll.length - fallbackEU.length})`);
+      console.log(`[Stage 2] ${fallbackAll.length} raw → ${fallbackDE.length} ships-to-DE (blocked: ${fallbackAll.length - fallbackDE.length})`);
       fallbackAll.forEach((m, i) => {
-        const r = euRejectReason(m);
+        const r = filterReason(m);
         const passes = r.startsWith("passes");
         console.log(
-          `  S2[${i}] ${passes ? "EU-OK " : "REJECT"}: "${m.title.slice(0, 50)}" | src="${m.source}" | cur="${m.price.currency ?? "—"}" | reason=${r} | link=${m.link ? m.link.slice(0, 70) : "(none)"}`,
+          `  S2[${i}] ${passes ? "DE-OK " : "BLOCK "}: "${m.title.slice(0, 50)}" | src="${m.source}" | cur="${m.price.currency ?? "—"}" | ${r} | link=${m.link ? m.link.slice(0, 70) : "(none)"}`,
         );
       });
 
-      allEU = deduplicate([...allEU, ...fallbackEU]);
-      console.log(`[Stage 2] Pool after fallback: ${allEU.length} EU results`);
+      // Debug: one entry per Stage 2 query
+      if (debug) {
+        allStage2Queries.forEach((q, i) => {
+          const { priced, rawCount } = fallbackResults[i];
+          const passed = priced.filter(shipsToGermany);
+          const rejected = priced.filter((m) => !shipsToGermany(m));
+          debug.push({
+            query: q,
+            engine: "google_shopping",
+            rawCount,
+            pricedCount: priced.length,
+            withLinkCount: priced.filter((m) => Boolean(m.link)).length,
+            passedCount: passed.length,
+            rejectedItems: rejected.map((m) => ({
+              title: m.title.slice(0, 60),
+              source: m.source ?? "",
+              reason: filterReason(m),
+            })),
+          });
+        });
+      }
+
+      candidates = deduplicate([...candidates, ...fallbackDE]);
+      console.log(`[Stage 2] Pool: ${candidates.length} ships-to-DE candidates`);
+    }
+
+    // Record final candidate pool for debug before finalization
+    if (debug) {
+      debug.finalCandidateCount = candidates.length;
+      debug.finalProducts = candidates.slice(0, 30).map((m) => ({
+        title: m.title.slice(0, 60),
+        store: m.source ?? "",
+        price: m.price.extracted_value,
+        link: m.link,
+      }));
     }
 
     // Finalize once with the full combined pool from Stage 1 + Stage 2.
-    if (allEU.length >= MIN_EU_MATCHES) {
-      const sorted = allEU.sort((a, b) => shopScore(b) - shopScore(a));
+    if (candidates.length >= MIN_EU_MATCHES) {
+      const sorted = candidates.sort((a, b) => shopScore(b) - shopScore(a));
       const result = await finalizeResult(imageUrl, sorted, productAnalysis);
       if (result) return result;
     }
 
     // -----------------------------------------------------------------------
-    // Stage 3: LAST RESORT — finalize with whatever EU results we have (≥1).
-    // Better to return an uncertain result than nothing.
+    // Stage 3: LAST RESORT — any 1+ result is better than nothing.
+    // Pad with all Lens priced matches that have links if candidates is sparse.
     // -----------------------------------------------------------------------
-    if (allEU.length > 0 && allEU.length < MIN_EU_MATCHES) {
-      // Pad with non-EU priced results (marked shipsFromNonEU later) if needed.
-      const nonEU = lensPriced.filter((m) => !allEU.includes(m));
-      const padded = deduplicate([...allEU, ...nonEU]).slice(0, MIN_EU_MATCHES);
+    if (candidates.length > 0 && candidates.length < MIN_EU_MATCHES) {
+      const extras = lensPriced.filter((m) => Boolean(m.link) && !candidates.includes(m));
+      const padded = deduplicate([...candidates, ...extras]).slice(0, MIN_EU_MATCHES);
       if (padded.length >= MIN_EU_MATCHES) {
         const sorted = padded.sort((a, b) => shopScore(b) - shopScore(a));
         const result = await finalizeResult(imageUrl, sorted, productAnalysis);
@@ -736,16 +818,16 @@ export async function searchWithGoogleLens(
     console.log("─────────────────────────────────────────────────────");
     console.log("[PIPELINE SUMMARY] All stages exhausted without result.");
     console.log(`  hadAnyPricedResults : ${hadAnyPricedResults}`);
-    console.log(`  allEU.length        : ${allEU.length} (MIN_EU_MATCHES=${MIN_EU_MATCHES})`);
+    console.log(`  candidates.length   : ${candidates.length} (MIN_EU_MATCHES=${MIN_EU_MATCHES})`);
     console.log(`  lensMatches.length  : ${lensMatches.length}`);
     console.log(`  lensPriced.length   : ${lensPriced.length}`);
-    console.log(`  lensEU.length       : ${lensEU.length}`);
+    console.log(`  lensDE.length       : ${lensDE.length}`);
     console.log(`  allQueries.length   : ${allQueries.length}`);
     console.log(`  brandQueries.length : ${brandQueries.length}`);
     console.log(`  nobrandQueries.length: ${nobrandQueries.length}`);
-    console.log(`  RETURN              : ${hadAnyPricedResults ? "no_eu_shop" : "null"}`);
+    console.log(`  RETURN              : ${hadAnyPricedResults ? "no_match" : "null"}`);
     console.log("─────────────────────────────────────────────────────");
-    return hadAnyPricedResults ? "no_eu_shop" : null;
+    return null;
   } finally {
     if (blobUrl) {
       await del(blobUrl).catch((err) =>
@@ -760,12 +842,8 @@ export async function searchWithGoogleLens(
 // ---------------------------------------------------------------------------
 
 function countLinks(result: AnalysisResult): number {
-  return [
-    result.originalProduct.link,
-    result.alternatives.best.link,
-    result.alternatives.cheapest.link,
-    result.alternatives.premium.link,
-  ].filter(Boolean).length;
+  return (result.originalProduct.link ? 1 : 0) +
+    result.alternatives.filter((a) => Boolean(a.link)).length;
 }
 
 async function finalizeResult(
@@ -851,10 +929,8 @@ async function refineWithOpenAI(
   const apiKey = getOpenAIKey();
   if (!apiKey) return null;
 
-  // GPT needs to assign 4 distinct role indices. With fewer candidates,
-  // duplicate indices are inevitable — skip GPT and use heuristic instead.
   if (priced.length < MIN_FOR_GPT) {
-    console.warn(`[refineWithOpenAI] ${priced.length} candidates < ${MIN_FOR_GPT} needed for 4 distinct roles → heuristic`);
+    console.warn(`[refineWithOpenAI] ${priced.length} candidates < ${MIN_FOR_GPT} → heuristic`);
     return null;
   }
 
@@ -883,13 +959,13 @@ async function refineWithOpenAI(
           : "",
         `Gender: ${productAnalysis.gender || "not specified"}.`,
         `HARD CONSTRAINTS — originalIndex MUST satisfy:`,
-        `  1. Color = "${productAnalysis.primaryColor}" (wrong color → score ≤55 → rejected)`,
-        `  2. Type = "${productAnalysis.productType}" (wrong type → score ≤55 → rejected)`,
+        `  1. Color = "${productAnalysis.primaryColor}" (wrong color → score ≤55)`,
+        `  2. Type = "${productAnalysis.productType}" (wrong type → score ≤55)`,
         (productAnalysis.brand || productAnalysis.brandCandidates?.length)
           ? `  3. Brand = ${productAnalysis.brand || productAnalysis.brandCandidates.join(" or ")} (wrong brand → −35 pts)`
-          : `  3. Brand: not required (not visible in photo)`,
+          : `  3. Brand: not required (not visible)`,
       ].filter(Boolean).join(" ")
-    : "Match by COLOR first (wrong color = wrong product), then product type, then brand.";
+    : "Match by COLOR first, then product type, then brand.";
 
   try {
     const response = await fetch(OPENAI_ENDPOINT, {
@@ -900,7 +976,7 @@ async function refineWithOpenAI(
       },
       body: JSON.stringify({
         model: "gpt-4o-mini",
-        max_tokens: 600,
+        max_tokens: 700,
         response_format: { type: "json_object" },
         messages: [
           {
@@ -912,33 +988,27 @@ async function refineWithOpenAI(
                 text: [
                   colorContext,
                   "",
-                  `EU shop candidates (all ship to Germany): ${JSON.stringify(matchList)}`,
+                  `Shop candidates (all ship to Germany): ${JSON.stringify(matchList)}`,
                   "",
-                  "STEP 1 — Score each candidate 0–100 using this rubric:",
-                  "  +35 pts: brand matches the photo",
-                  "  +35 pts: color matches exactly (navy ≠ white/beige/grey/black; black ≠ navy/grey/brown)",
-                  "  +20 pts: product type matches exactly (T-Shirt ≠ Polo ≠ Hoodie ≠ Sweatshirt; Sneaker ≠ Boot ≠ Sandal)",
-                  "  +10 pts: logo / distinctive detail matches",
-                  "  HARD RULE: wrong color (even slightly off) → cap score at 55",
-                  "  HARD RULE: wrong product type → cap score at 55",
-                  "  Wrong color OR wrong product type = score ≤55 = rejected. This is non-negotiable.",
+                  "STEP 1 — Score each candidate 0–100:",
+                  "  +35 pts: brand matches",
+                  "  +35 pts: color matches exactly (navy ≠ white/grey/black; black ≠ navy)",
+                  "  +20 pts: product type matches exactly (T-Shirt ≠ Polo ≠ Hoodie; Sneaker ≠ Boot)",
+                  "  +10 pts: logo / detail matches",
+                  "  HARD: wrong color → cap at 55. Wrong product type → cap at 55.",
                   "",
-                  "STEP 2 — Pick indices (all must be different):",
-                  "  originalIndex: highest-scored candidate",
-                  "  bestIndex: best EU/German shop (Zalando, About You, Breuninger, brand .de preferred)",
-                  "  cheapestIndex: lowest EUR price",
-                  "  premiumIndex: premium shop (Farfetch, Mytheresa, Mr Porter, SSENSE preferred)",
+                  "STEP 2 — Set originalIndex: highest-scored candidate (must be ≥40).",
                   "",
-                  "STEP 3 — Set matchQuality from scores[originalIndex]:",
-                  "  ≥90 → 'exact'   |   70–89 → 'similar'   |   <70 → 'uncertain'",
+                  `STEP 3 — Build topIndices: up to ${MAX_ALTERNATIVES + 1} distinct indices sorted by score (highest first).`,
+                  "  First element MUST be originalIndex.",
+                  "  Include only candidates with score ≥40.",
+                  "  All indices must be valid (0 to candidates.length-1) and distinct.",
                   "",
-                  'Return JSON: {"scores":[85,92,61,78],"originalIndex":1,"bestIndex":0,"cheapestIndex":2,"premiumIndex":3,"productName":"Polo Ralph Lauren Navy T-Shirt","brand":"Ralph Lauren","category":"Shirt","confidence":88,"matchQuality":"exact"}',
+                  "STEP 4 — Set matchQuality from scores[originalIndex]: ≥90→'exact', 70–89→'similar', <70→'uncertain'.",
                   "",
-                  "Other rules:",
-                  "- scores array: one integer per candidate, same order as input",
-                  "- productName: brand + color + product name only (no store)",
-                  "- category: Schuhe | Hoodie | Shirt | Jacke | Hose | Uhr | Tasche | Gürtel | Brille | Kleid | Produkt",
-                  "- confidence: 50–95",
+                  `Return JSON: {"scores":[85,92,61,78,55,90],"originalIndex":1,"topIndices":[1,5,0,3],"productName":"Nike Air Max 90 Weiß","brand":"Nike","category":"Schuhe","confidence":92,"matchQuality":"exact"}`,
+                  "",
+                  "Rules: scores array length = candidates array length. productName = brand+color+name. category: Schuhe|Hoodie|Shirt|Jacke|Hose|Uhr|Tasche|Gürtel|Brille|Kleid|Produkt. confidence: 50–95.",
                 ].join("\n"),
               },
             ],
@@ -959,37 +1029,47 @@ async function refineWithOpenAI(
     if (!content) return null;
 
     const gpt = JSON.parse(content) as GPTRefinement;
-    const indices = [gpt.originalIndex, gpt.bestIndex, gpt.cheapestIndex, gpt.premiumIndex];
 
-    if (indices.some((i) => typeof i !== "number" || i < 0 || i >= priced.length)) {
-      console.error("[refineWithOpenAI] Ungültige Indices:", gpt);
-      return null;
-    }
-    if (new Set(indices).size < 4) {
-      console.warn("[refineWithOpenAI] Doppelte Indices → Heuristik.");
+    // Validate originalIndex
+    if (typeof gpt.originalIndex !== "number" || gpt.originalIndex < 0 || gpt.originalIndex >= priced.length) {
+      console.error("[refineWithOpenAI] Invalid originalIndex:", gpt.originalIndex);
       return null;
     }
 
-    // Score-based match quality — the core of the ranking engine.
+    // Build topIndices: use GPT's list, validate each, fall back to score-sorted order
     const scores: number[] = Array.isArray(gpt.scores) ? gpt.scores : [];
+    let topIndices: number[] = Array.isArray(gpt.topIndices)
+      ? gpt.topIndices.filter((i): i is number => typeof i === "number" && i >= 0 && i < priced.length)
+      : [];
+
+    // Ensure originalIndex is first and list is unique
+    topIndices = [gpt.originalIndex, ...topIndices.filter((i) => i !== gpt.originalIndex)];
+    topIndices = [...new Set(topIndices)].slice(0, MAX_ALTERNATIVES + 1);
+
+    // If GPT returned no extras, fill from score-sorted order
+    if (topIndices.length < 2 && scores.length > 0) {
+      const sorted = scores
+        .map((s, i) => ({ s, i }))
+        .sort((a, b) => b.s - a.s)
+        .filter(({ i }) => !topIndices.includes(i) && i < priced.length)
+        .map(({ i }) => i);
+      topIndices = [...topIndices, ...sorted].slice(0, MAX_ALTERNATIVES + 1);
+    }
+
     const originalScore = typeof scores[gpt.originalIndex] === "number"
       ? scores[gpt.originalIndex]
       : (gpt.matchQuality === "exact" ? 92 : gpt.matchQuality === "similar" ? 75 : 55);
 
-    console.log(`[refineWithOpenAI] GPT raw: originalIndex=${gpt.originalIndex} bestIndex=${gpt.bestIndex} cheapestIndex=${gpt.cheapestIndex} premiumIndex=${gpt.premiumIndex}`);
-    console.log(`[refineWithOpenAI] scores (all ${scores.length}): ${scores.map((s, i) => `[${i}]=${s}`).join(" ")}`);
+    console.log(`[refineWithOpenAI] originalIndex=${gpt.originalIndex} score=${originalScore} topIndices=[${topIndices.join(",")}]`);
+    console.log(`[refineWithOpenAI] scores: ${scores.map((s, i) => `[${i}]=${s}`).join(" ")}`);
     scores.forEach((s, i) => {
       if (i < priced.length) {
         console.log(`  SCORE[${i}]=${s} "${priced[i].title.slice(0, 50)}" @ ${priced[i].source}`);
       }
     });
-    console.log(`[refineWithOpenAI] best candidate: index=${gpt.originalIndex} score=${originalScore} → "${priced[gpt.originalIndex]?.title.slice(0, 50) ?? "?"}"`);
 
-    // <40 = totally wrong product (wrong type AND wrong color). Above 40 we show
-    // with matchQuality="uncertain". The hard cap at 55 for wrong color/type means
-    // those items still show but never as "exact" or "similar".
     if (originalScore < 40) {
-      console.warn(`[refineWithOpenAI] EXIT: score=${originalScore} < 40 threshold → no usable candidates → null`);
+      console.warn(`[refineWithOpenAI] EXIT: score=${originalScore} < 40 → null`);
       return null;
     }
 
@@ -998,10 +1078,8 @@ async function refineWithOpenAI(
       originalScore >= 70 ? "similar" :
       "uncertain";
 
-    const original = priced[gpt.originalIndex];
-    const best = priced[gpt.bestIndex];
-    const cheapest = priced[gpt.cheapestIndex];
-    const premium = priced[gpt.premiumIndex];
+    const original = priced[topIndices[0]];
+    const altItems = topIndices.slice(1).map((i) => priced[i]);
     const prices = priced.map((m) => m.price.extracted_value);
     const anyThumb =
       priced.find((m) => m.image ?? m.thumbnail)?.image ??
@@ -1024,8 +1102,20 @@ async function refineWithOpenAI(
       shipsFromNonEU: false,
     });
 
+    // Assign roles: best=highest scored alt, cheapest/premium by price, rest=other
+    const roleMap = new Map<PricedMatch, AlternativeProduct["role"]>();
+    if (altItems[0]) roleMap.set(altItems[0], "best");
+    const byPrice = [...altItems].sort((a, b) => a.price.extracted_value - b.price.extracted_value);
+    if (byPrice[0] && !roleMap.has(byPrice[0])) roleMap.set(byPrice[0], "cheapest");
+    if (byPrice[byPrice.length - 1] && !roleMap.has(byPrice[byPrice.length - 1])) {
+      roleMap.set(byPrice[byPrice.length - 1], "premium");
+    }
+    const alternatives: AlternativeProduct[] = altItems.map((item) =>
+      toAlt(item, roleMap.get(item) ?? "other"),
+    );
+
     console.log(
-      `[refineWithOpenAI] matchQuality="${matchQuality}" score=${originalScore} | "${original.title.slice(0, 40)}" @ ${original.source}`,
+      `[refineWithOpenAI] matchQuality="${matchQuality}" score=${originalScore} | "${original.title.slice(0, 40)}" @ ${original.source} | ${alternatives.length} alts`,
     );
 
     return {
@@ -1042,11 +1132,7 @@ async function refineWithOpenAI(
       confidence: Math.min(95, Math.max(50, Math.round(gpt.confidence ?? 70))),
       priceRange: { min: Math.min(...prices), max: Math.max(...prices) },
       matchQuality,
-      alternatives: {
-        best: toAlt(best, "best"),
-        cheapest: toAlt(cheapest, "cheapest"),
-        premium: toAlt(premium, "premium"),
-      },
+      alternatives,
     };
   } catch (err) {
     console.error("[refineWithOpenAI] Fehler:", err);
@@ -1061,12 +1147,7 @@ async function refineWithOpenAI(
 function buildResultFromPriced(priced: PricedMatch[]): AnalysisResult | null {
   if (priced.length < 1) return null;
 
-  const [original, ...rest] = priced;
-  const byPrice = [...rest].sort((a, b) => a.price.extracted_value - b.price.extracted_value);
-  // Fill roles with available items, falling back to original when not enough
-  const cheapest = byPrice[0] ?? original;
-  const premium = byPrice[byPrice.length - 1] ?? original;
-  const best = byPrice.length > 1 ? byPrice[Math.floor((byPrice.length - 1) / 2)] : (byPrice[0] ?? original);
+  const [original, ...rest] = priced.slice(0, MAX_ALTERNATIVES + 1);
   const prices = priced.map((m) => m.price.extracted_value);
   const anyThumb =
     priced.find((m) => m.image ?? m.thumbnail)?.image ??
@@ -1087,14 +1168,23 @@ function buildResultFromPriced(priced: PricedMatch[]): AnalysisResult | null {
     shipsFromNonEU: false,
   });
 
-  // Deduplicate alternatives by link so the UI doesn't show 3 identical cards
-  // when there aren't enough unique results.
-  const usedLinks = new Set<string>();
-  const dedup = (alt: AlternativeProduct): AlternativeProduct => {
-    if (!alt.link || usedLinks.has(alt.link)) return { ...alt, link: undefined };
-    usedLinks.add(alt.link);
-    return alt;
-  };
+  // Assign roles by price within the alt list; deduplicate by link.
+  const byPrice = [...rest].sort((a, b) => a.price.extracted_value - b.price.extracted_value);
+  const roleMap = new Map<PricedMatch, AlternativeProduct["role"]>();
+  if (rest[0]) roleMap.set(rest[0], "best");               // highest shop score (list is score-sorted)
+  if (byPrice[0] && !roleMap.has(byPrice[0])) roleMap.set(byPrice[0], "cheapest");
+  if (byPrice[byPrice.length - 1] && !roleMap.has(byPrice[byPrice.length - 1])) {
+    roleMap.set(byPrice[byPrice.length - 1], "premium");
+  }
+
+  const usedLinks = new Set<string>([original.link ?? ""]);
+  const alternatives: AlternativeProduct[] = rest
+    .map((item) => toAlt(item, roleMap.get(item) ?? "other"))
+    .filter((alt) => {
+      if (!alt.link || usedLinks.has(alt.link)) return false;
+      usedLinks.add(alt.link);
+      return true;
+    });
 
   return {
     originalProduct: {
@@ -1107,14 +1197,10 @@ function buildResultFromPriced(priced: PricedMatch[]): AnalysisResult | null {
     },
     brand: guessBrand(original.title),
     category: guessCategory(original.title),
-    confidence: Math.min(95, 50 + priced.length * 5),
+    confidence: Math.min(95, 50 + priced.length * 4),
     priceRange: { min: Math.min(...prices), max: Math.max(...prices) },
     matchQuality: "uncertain",
-    alternatives: {
-      best: dedup(toAlt(best, "best")),
-      cheapest: dedup(toAlt(cheapest, "cheapest")),
-      premium: dedup(toAlt(premium, "premium")),
-    },
+    alternatives,
   };
 }
 

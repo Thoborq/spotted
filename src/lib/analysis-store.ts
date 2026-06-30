@@ -71,11 +71,7 @@ export function saveAnalysisResult(result: AnalysisResult): StoredAnalysis {
       price: result.originalProduct.price,
       link: result.originalProduct.link,
     },
-    alternatives: [
-      result.alternatives.best,
-      result.alternatives.cheapest,
-      result.alternatives.premium,
-    ],
+    alternatives: result.alternatives,
   };
 
   writeAll([analysis, ...history].slice(0, MAX_ENTRIES));

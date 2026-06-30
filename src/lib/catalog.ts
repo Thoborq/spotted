@@ -1,6 +1,6 @@
 import type { ProductIcon } from "@/components/ui/ProductThumb";
 
-export type AlternativeRole = "best" | "cheapest" | "premium";
+export type AlternativeRole = "best" | "cheapest" | "premium" | "other";
 
 export type CatalogAlternative = {
   role: AlternativeRole;
