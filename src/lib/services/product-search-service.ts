@@ -380,54 +380,78 @@ async function textSearch(query: string, apiKey: string): Promise<TextSearchResu
       return { priced: [], rawCount: 0 };
     }
 
-    // ── Log all top-level keys ────────────────────────────────────────────
-    const topKeys = Object.keys(data);
-    console.log(`[textSearch] Top-level keys (${topKeys.length}): ${topKeys.join(", ")}`);
-
+    // ── Full structural analysis of every top-level key ─────────────────────
+    // This runs on every call and emits enough info to determine:
+    //  1. Which keys SerpAPI actually returned
+    //  2. Whether product data lives under a non-standard key
+    //  3. What the first two items of any array look like in full
+    console.log(`[SERP-RESPONSE] ════════════ FULL STRUCTURE ════════════`);
     if (data.error) {
-      console.error(`[textSearch] SerpAPI error field: ${data.error}`);
+      console.error(`[SERP-RESPONSE] error: ${JSON.stringify(data.error)}`);
     }
     if (data.search_metadata) {
-      console.log(`[textSearch] search_metadata.status: ${data.search_metadata.status}`);
-    }
-    if (data.search_information) {
-      console.log(`[textSearch] search_information.total_results: ${data.search_information.total_results}`);
-      console.log(`[textSearch] search_information.query_displayed: ${data.search_information.query_displayed}`);
+      console.log(`[SERP-RESPONSE] search_metadata: ${JSON.stringify(data.search_metadata)}`);
     }
     if (data.search_parameters) {
-      console.log(`[textSearch] search_parameters: ${JSON.stringify(data.search_parameters)}`);
+      console.log(`[SERP-RESPONSE] search_parameters: ${JSON.stringify(data.search_parameters)}`);
+    }
+    if (data.search_information) {
+      console.log(`[SERP-RESPONSE] search_information: ${JSON.stringify(data.search_information)}`);
     }
 
-    // ── Count results in every known array field ──────────────────────────
-    const RESULT_FIELDS = [
-      "shopping_results", "inline_shopping_results", "organic_results",
-      "local_results", "related_shopping_results", "immersive_products",
-    ] as const;
-    for (const field of RESULT_FIELDS) {
-      const arr = data[field];
-      if (Array.isArray(arr)) {
-        console.log(`[textSearch] ${field}: ${arr.length} items`);
+    // Dump every remaining top-level key with type + count + first 2 items
+    const SKIP_KEYS = new Set(["search_metadata", "search_parameters", "search_information", "error"]);
+    for (const key of Object.keys(data)) {
+      if (SKIP_KEYS.has(key)) continue;
+      const val = data[key];
+      if (Array.isArray(val)) {
+        console.log(`[SERP-RESPONSE] ${key}: Array(${val.length})`);
+        if (val.length > 0) {
+          console.log(`[SERP-RESPONSE]   ${key}[0]: ${JSON.stringify(val[0]).slice(0, 800)}`);
+        }
+        if (val.length > 1) {
+          console.log(`[SERP-RESPONSE]   ${key}[1]: ${JSON.stringify(val[1]).slice(0, 800)}`);
+        }
+      } else if (val !== null && typeof val === "object") {
+        const subKeys = Object.keys(val as object);
+        console.log(`[SERP-RESPONSE] ${key}: Object{${subKeys.join(", ")}}`);
       } else {
-        console.log(`[textSearch] ${field}: absent`);
+        console.log(`[SERP-RESPONSE] ${key}: ${typeof val} = ${String(val).slice(0, 200)}`);
+      }
+    }
+    console.log(`[SERP-RESPONSE] ════════════════════════════════════════`);
+
+    // ── Pick the best result array ────────────────────────────────────────
+    // Try every key that could plausibly hold shopping product objects.
+    // Criteria: is an array whose first element has a title or name field.
+    const CANDIDATE_KEYS = [
+      "shopping_results", "inline_shopping_results", "organic_results",
+      "products", "shopping", "related_products", "product_results",
+      "local_results", "related_shopping_results", "immersive_products",
+      "visual_matches", "images_results",
+    ];
+
+    let raw: ShoppingApiResult[] = [];
+    let chosenKey = "(none)";
+
+    for (const key of CANDIDATE_KEYS) {
+      const arr = data[key];
+      if (!Array.isArray(arr) || arr.length === 0) continue;
+      const first = arr[0] as Record<string, unknown>;
+      const hasTitle = typeof first.title === "string" || typeof first.name === "string";
+      const hasPrice = first.price !== undefined || first.extracted_price !== undefined
+                    || first.prices !== undefined;
+      if (hasTitle || hasPrice) {
+        raw = arr as ShoppingApiResult[];
+        chosenKey = key;
+        break;
       }
     }
 
-    // ── Use shopping_results; fall back to inline_shopping_results ────────
-    const primaryResults = data.shopping_results;
-    const inlineResults  = data.inline_shopping_results;
-
-    let raw: ShoppingApiResult[];
-    if (Array.isArray(primaryResults) && primaryResults.length > 0) {
-      raw = primaryResults;
-      console.log(`[textSearch] Using shopping_results (${raw.length} items)`);
-    } else if (Array.isArray(inlineResults) && inlineResults.length > 0) {
-      raw = inlineResults;
-      console.log(`[textSearch] Falling back to inline_shopping_results (${raw.length} items)`);
+    if (raw.length > 0) {
+      console.log(`[textSearch] Using field "${chosenKey}" (${raw.length} items)`);
     } else {
-      raw = [];
-      console.warn(`[textSearch] No shopping results in ANY field for: "${query}"`);
-      // Log first 1000 chars of raw body to spot unexpected structure
-      console.warn(`[textSearch] Body preview: ${bodyText.slice(0, 1000)}`);
+      console.warn(`[textSearch] No usable product array found in ANY key for: "${query}"`);
     }
 
     console.log(`[textSearch] "${query}" → ${raw.length} raw Shopping results`);
